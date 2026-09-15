@@ -40,8 +40,8 @@ APP_TITLE = "Учёт поверки"
 VERSION = "1.0"
 
 # Адрес сервера синхронизации и токен (вшиты в приложение)
-SERVER_URL = "https://CHANGE-ME.example.com"
-API_TOKEN = "CHANGE_ME_TOKEN"
+SERVER_URL = "https://rezzonvoice.ru/api"
+API_TOKEN = "hBqxlkwcoWrA65RuUaHstETn7ipOZ2801YIQD3GgSbeNmXJy"
 
 C = {
     "bg": get_color_from_hex("#F2F4F8"),

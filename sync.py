@@ -25,8 +25,8 @@ except ImportError:
 STATE_FILE = "sync_state.json"
 
 # Адрес сервера и токен задаются при сборке (см. SERVER_URL / API_TOKEN)
-SERVER_URL = "https://CHANGE-ME.example.com"
-API_TOKEN = "CHANGE_ME_TOKEN"
+SERVER_URL = "https://rezzonvoice.ru/api"
+API_TOKEN = "hBqxlkwcoWrA65RuUaHstETn7ipOZ2801YIQD3GgSbeNmXJy"
 APP_VERSION = "1.0"
 
 
