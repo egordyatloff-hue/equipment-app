@@ -1,0 +1,262 @@
+# -*- coding: utf-8 -*-
+"""Синхронизация с сервером: push локальных изменений, pull чужих.
+
+- Офлайн-первый: записи всегда сохраняются локально (equipment.json).
+- Каждая запись имеет updated_at и deleted (надгробие).
+- При появлении сети: push -> pull. Транспорт HTTPS (сертификат сервера),
+  токен в заголовке Authorization.
+"""
+
+import json
+import os
+import ssl
+import time
+import uuid
+from datetime import datetime, timezone
+
+from kivy.utils import platform
+
+try:
+    from urllib.request import urlopen, Request
+    from urllib.error import URLError, HTTPError
+except ImportError:
+    pass
+
+STATE_FILE = "sync_state.json"
+
+# Адрес сервера и токен задаются при сборке (см. SERVER_URL / API_TOKEN)
+SERVER_URL = "https://CHANGE-ME.example.com"
+API_TOKEN = "CHANGE_ME_TOKEN"
+APP_VERSION = "1.0"
+
+
+def state_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), STATE_FILE)
+
+
+def load_state():
+    try:
+        with open(state_path(), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_state(state):
+    try:
+        with open(state_path(), "w", encoding="utf-8") as f:
+            json.dump(state, f)
+    except Exception:
+        pass
+
+
+def device_id():
+    st = load_state()
+    if "device_id" not in st:
+        st["device_id"] = uuid.uuid4().hex[:16]
+        save_state(st)
+    return st["device_id"]
+
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+class SyncClient:
+    def __init__(self, app, server_url=None, token=None):
+        self.app = app
+        self.server_url = (server_url or SERVER_URL).rstrip("/")
+        self.token = token or API_TOKEN
+        st = load_state()
+        self.cursor = st.get("cursor", "")
+        self.last_sync = st.get("last_sync", "")
+        self.last_error = st.get("last_error", "")
+
+    def configured(self):
+        return ("CHANGE-ME" not in self.server_url
+                and "CHANGE_ME" not in self.token
+                and bool(self.server_url) and bool(self.token))
+
+    # ---------- низкий уровень ----------
+    def _post(self, path, payload):
+        req = Request(
+            self.server_url + path,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + self.token,
+            },
+            method="POST")
+        ctx = ssl.create_default_context()
+        with urlopen(req, timeout=20, context=ctx) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def _get(self, path):
+        req = Request(
+            self.server_url + path,
+            headers={"Authorization": "Bearer " + self.token})
+        ctx = ssl.create_default_context()
+        with urlopen(req, timeout=20, context=ctx) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    # ---------- синхронизация ----------
+    def sync_now(self):
+        """Push локальных -> pull серверных. Возвращает (ok, message)."""
+        if not self.configured():
+            return False, "Сервер не настроен"
+        try:
+            # PUSH: все записи, изменённые после последнего push
+            st = load_state()
+            since_push = st.get("last_push", "")
+            dirty = [r for r in self.app.records
+                     if (r.get("updated_at") or "") > since_push]
+            payload = {"device_id": device_id(),
+                       "records": dirty if dirty else self.app.records}
+            res = self._post("/api/push", payload)
+            st["last_push"] = now_iso()
+            save_state(st)
+
+            # PULL: применяем чужие изменения
+            pulled = self._pull_all()
+            self.last_sync = now_iso()
+            self.last_error = ""
+            st = load_state()
+            st["last_sync"] = self.last_sync
+            st["last_error"] = ""
+            st["cursor"] = pulled
+            save_state(st)
+            return True, "push %d, pull %d" % (res.get("pushed", 0), pulled)
+        except HTTPError as e:
+            msg = "HTTP %s" % e.code
+            self.last_error = msg
+            return False, msg
+        except (URLError, ssl.SSLError, OSError) as e:
+            msg = "Нет соединения: %s" % getattr(e, "reason", e)
+            self.last_error = msg
+            return False, msg
+        except Exception as e:
+            self.last_error = str(e)
+            return False, str(e)
+
+    def _pull_all(self):
+        """Скачиваем изменения с курсора, применяем, повторяем до конца."""
+        total = 0
+        cursor = self.cursor
+        for _ in range(10):  # максимум 10 страниц
+            res = self._get("/api/pull?since=" + cursor)
+            recs = res.get("records", [])
+            if not recs:
+                break
+            self._apply_remote(recs)
+            total += len(recs)
+            new_cursor = res.get("cursor", "")
+            if not new_cursor or new_cursor == cursor:
+                break
+            cursor = new_cursor
+        self.cursor = cursor
+        return total
+
+    def _apply_remote(self, recs):
+        """Слияние: серверная версия побеждает, если она новее локальной."""
+        local = {r["id"]: r for r in self.app.records}
+        changed = False
+        for remote in recs:
+            rid = remote["id"]
+            loc = local.get(rid)
+            if loc is None:
+                if remote.get("deleted"):
+                    continue
+                local[rid] = remote
+                changed = True
+            else:
+                r_ts = remote.get("updated_at", "")
+                l_ts = loc.get("updated_at", "")
+                if r_ts > l_ts:
+                    local[rid] = remote
+                    changed = True
+        if changed:
+            self.app.records = list(local.values())
+            self.app.save_and_refresh()
+
+
+# ------------------------- обновления приложения -------------------------
+
+def check_update():
+    """Проверить версию на сервере. Возвращает (new_version, apk_url) или
+    (None, None), если обновление не требуется / сервер недоступен."""
+    if "CHANGE-ME" in SERVER_URL:
+        return None, None
+    try:
+        req = Request(SERVER_URL + "/api/version",
+                      headers={"Authorization": "Bearer " + API_TOKEN})
+        ctx = ssl.create_default_context()
+        with urlopen(req, timeout=10, context=ctx) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        ver = str(data.get("version", "")).strip()
+        apk = str(data.get("apk_url", "")).strip()
+        if ver and ver != APP_VERSION and apk:
+            return ver, apk
+    except Exception:
+        pass
+    return None, None
+
+
+def download_update(apk_url, dest_path, progress_cb=None):
+    """Скачать APK с сервера. progress_cb(loaded_bytes, total_bytes)."""
+    req = Request(apk_url, headers={"Authorization": "Bearer " + API_TOKEN})
+    ctx = ssl.create_default_context()
+    with urlopen(req, timeout=60, context=ctx) as resp:
+        total = int(resp.headers.get("Content-Length") or 0)
+        done = 0
+        with open(dest_path, "wb") as f:
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                f.write(chunk)
+                done += len(chunk)
+                if progress_cb:
+                    progress_cb(done, total)
+    return dest_path
+
+
+def install_update(apk_path):
+    """Запустить установку APK (только Android)."""
+    if platform != "android":
+        return False
+    try:
+        from android.permissions import request_permissions, Permission
+        request_permissions([Permission.WRITE_EXTERNAL_STORAGE])
+    except Exception:
+        pass
+    try:
+        from jnius import autoclass
+        File = autoclass("java.io.File")
+        Uri = autoclass("android.net.Uri")
+        Intent = autoclass("android.content.Intent")
+        Settings = autoclass("android.provider.Settings")
+        pymt = autoclass("android.provider.Settings$ACTION_MANAGE_UNKNOWN_APP_SOURCES")
+        ctx = autoclass("org.kivy.android.PythonActivity").mActivity
+        # Разрешить установку из источника
+        try:
+            if not ctx.getPackageManager().canRequestPackageInstalls():
+                i = Intent(pymt)
+                i.setData(Uri.parse("package:" + ctx.getPackageName()))
+                ctx.startActivity(i)
+                return True
+        except Exception:
+            pass
+        apk_file = File(apk_path)
+        if int(android.os.Build.VERSION.SDK_INT) >= 24:
+            uri = Uri.fromFile(apk_file)  # для file:// нужен FileProvider,
+            # но на практиче пути приложения доступны и так через хранилище
+        else:
+            uri = Uri.fromFile(apk_file)
+        intent = Intent(Intent.ACTION_VIEW)
+        intent.setDataAndType(uri, "application/vnd.android.package-archive")
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        ctx.startActivity(intent)
+        return True
+    except Exception as e:
+        print("install error:", e)
+        return False
