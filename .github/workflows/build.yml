@@ -29,6 +29,9 @@ jobs:
 
       - name: Accept Android licenses and prepare buildozer SDK
         run: |
+          export JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-amd64
+          export PATH=$JAVA_HOME/bin:$PATH
+          java -version
           SDK=/home/runner/.buildozer/android/platform/android-sdk
           mkdir -p $SDK/licenses
           echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > $SDK/licenses/android-sdk-license
@@ -37,7 +40,6 @@ jobs:
           mkdir -p $SDK/tools/bin $SDK/cmdline-tools
           curl -sL -o /tmp/clt.zip "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
           unzip -q /tmp/clt.zip -d $SDK/cmdline-tools
-          # sdkmanager должен лежать в tools/bin
           cp -r $SDK/cmdline-tools/cmdline-tools/* $SDK/tools/
           chmod +x $SDK/tools/bin/sdkmanager
           yes | $SDK/tools/bin/sdkmanager --sdk_root=$SDK --licenses > /dev/null || true
@@ -45,6 +47,8 @@ jobs:
 
       - name: Build APK
         run: |
+          export JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-amd64
+          export PATH=$JAVA_HOME/bin:$PATH
           buildozer -v android debug
 
       - name: Upload APK artifact
