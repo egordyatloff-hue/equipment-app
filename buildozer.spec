@@ -12,7 +12,7 @@ fullscreen = 0
 icon.filename = icon.png
 android.api = 34
 android.minapi = 24
-android.ndk = 26b
+android.ndk = 25b
 android.archs = arm64-v8a,armeabi-v7a
 android.allow_backup = True
 
