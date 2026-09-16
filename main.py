@@ -671,11 +671,27 @@ class EquipmentApp(App):
 
     # ---------- построение UI ----------
     def build_static(self):
-        self._build_list_screen(self.sm.get_screen("list"))
-        self._build_edit_screen(self.sm.get_screen("edit"))
-        self._build_due_screen(self.sm.get_screen("due"))
-        self.show_list()
-        Clock.schedule_interval(self.periodic_sync, 300)  # каждые 5 минут
+        try:
+            self._build_list_screen(self.sm.get_screen("list"))
+            self._build_edit_screen(self.sm.get_screen("edit"))
+            self._build_due_screen(self.sm.get_screen("due"))
+            self.show_list()
+            Clock.schedule_interval(self.periodic_sync, 300)
+        except Exception:
+            import traceback
+            from kivy.uix.label import Label as _L
+            from kivy.uix.popup import Popup as _P
+            _P(title="Ошибка старта", content=_L(
+                text=traceback.format_exc()[-1500:],
+                font_size="10sp"),
+                size_hint=(0.95, 0.9)).open()
+        # Обновления: проверить в фоне через 10 секунд после старта
+        Clock.schedule_once(lambda dt: self._startup_sync(), 10)
+
+    def _startup_sync(self):
+        from threading import Thread
+        Thread(target=lambda: self.sync_client.sync_now(),
+               daemon=True).start()
 
     def periodic_sync(self, dt):
         self.sync_client.sync_now()
