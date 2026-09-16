@@ -1219,4 +1219,31 @@ class EquipmentApp(App):
 
 
 if __name__ == "__main__":
-    EquipmentApp().run()
+    import traceback
+    try:
+        EquipmentApp().run()
+    except Exception:
+        err = traceback.format_exc()
+        # Сохранить лог в корень хранилища, чтобы можно было снять с телефона
+        try:
+            log_path = os.path.join(data_dir(), "crash.log")
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write(err)
+            print("CRASH LOG SAVED:", log_path)
+        except Exception:
+            pass
+        # Показать на экране
+        try:
+            from kivy.base import runTouchApp
+            from kivy.uix.label import Label as _L
+            from kivy.uix.button import Button as _B
+            from kivy.uix.boxlayout import BoxLayout as _BL
+            from kivy.uix.popup import Popup as _P
+            bl = _BL(orientation="vertical", padding=[10], spacing=[10])
+            bl.add_widget(_L(text="Ошибка запуска (скопирована в crash.log):",
+                             font_size="13sp"))
+            bl.add_widget(_L(text=err[-1800:], font_size="9sp"))
+            runTouchApp(bl)
+        except Exception:
+            print(err)
+        raise
