@@ -63,7 +63,7 @@ C = {
 
 STATUS_INFO = {
     "green": ("ОК", C["ok"], C["chip_green"]),
-    "yellow": ("В этом мес.", C["text"], C["chip_yellow"]),
+    "yellow": ("На поверке", C["text"], C["chip_yellow"]),
     "red": ("Просрочено", C["white"], C["danger"]),
     "none": ("Нет даты", C["text_light"], C["chip_none"]),
 }
@@ -72,6 +72,8 @@ STATES = [
     ("installed", "Установлен"),
     ("removed", "Снят"),
     ("verification", "На поверке"),
+    ("reserve", "В резерве"),
+    ("taken_from_verification", "Забрали с поверки"),
 ]
 
 STATE_LABELS = dict(STATES)
@@ -291,6 +293,10 @@ def effective_status(rec, records):
     state = rec.get("state") or "installed"
     serial = (rec.get("serial") or "").strip()
 
+    # Запись «Забрали с поверки» = прибор вернули из поверки: всегда ОК
+    if state == "taken_from_verification":
+        return "green"
+
     same = [o for o in records
             if o is not rec and not o.get("deleted")
             and (o.get("serial") or "").strip() == serial]
@@ -326,6 +332,13 @@ def effective_status(rec, records):
             od = parse_date(o.get("verification_date", ""))
             if od and d and od > d:
                 return "green"
+        # Поверка завершилась «Забрали с поверки» и прибор остался со
+        # старым сроком — считаем зелёным (прибор цел, ждёт установки)
+        later_taken = [o for o in same
+                       if (o.get("state") or "installed") == "taken_from_verification"
+                       and (o.get("added") or "", o.get("id", 0)) > my_key]
+        if later_taken:
+            return "green"
         return st
     if st != "red":
         return st
@@ -336,6 +349,12 @@ def effective_status(rec, records):
         if od and d and od > d:
             return "green"
     if vers_after and ver_actual:
+        return "green"
+    # «Забрали с поверки» по этому прибору закрывает просрочку
+    later_taken_any = [o for o in same
+                       if (o.get("state") or "installed") == "taken_from_verification"
+                       and (o.get("added") or "", o.get("id", 0)) > my_key]
+    if later_taken_any:
         return "green"
     return st
 
@@ -567,6 +586,29 @@ class RecordCard(ButtonBehavior, BoxLayout):
         d = parse_date(rec.get("verification_date", ""))
         st = effective_status(rec, app.records)
         st_text, _fg, chip_bg = STATUS_INFO[st]
+
+        # Состояние «В резерве» показываем своим ярлыком.
+        # «Забрали с поверки» — своим ярлыком только пока запись актуальна;
+        # если по прибору появилась более поздняя запись — обычный статус.
+        rec_state = rec.get("state") or "installed"
+        my_key = (rec.get("added") or "", rec.get("id", 0))
+        serial = (rec.get("serial") or "").strip()
+        name = (rec.get("name") or "").strip()
+        has_later = False
+        for o in app.records:
+            if o is rec or o.get("deleted"):
+                continue
+            o_serial = (o.get("serial") or "").strip()
+            o_name = (o.get("name") or "").strip()
+            same = (serial and o_serial == serial) or \
+                   (not serial and name and o_name == name)
+            if same and (o.get("added") or "", o.get("id", 0)) > my_key:
+                has_later = True
+                break
+        if rec_state == "reserve":
+            st_text, chip_bg = "В резерве", C["line"]
+        elif rec_state == "taken_from_verification" and not has_later:
+            st_text, chip_bg = "Забрали", C["line"]
 
         with self.canvas.before:
             Color(0.16, 0.18, 0.22, 0.06)
@@ -822,7 +864,7 @@ class EquipmentApp(App):
                                       background_color=C["ok"])
         self.state_label_btn.size_hint_y = None
         self.state_label_btn.height = dp(56)
-        self.state_label_btn.bind(on_release=lambda *a: self._cycle_state())
+        self.state_label_btn.bind(on_release=lambda *a: self.open_state_menu())
         box.add_widget(self.state_label_btn)
 
         box.add_widget(BoxLayout())  # распорка
@@ -908,11 +950,31 @@ class EquipmentApp(App):
         scr.add_widget(box)
 
     # ---------- вспомогательное ----------
-    def _cycle_state(self):
-        cur = getattr(self, "_edit_state", "installed")
-        keys = [k for k, _ in STATES]
-        nxt = keys[(keys.index(cur) + 1) % len(keys)]
-        self._edit_state = nxt
+    def open_state_menu(self):
+        """Выбор состояния из списка (вместо переключения по кругу)."""
+        box = BoxLayout(orientation="vertical", spacing=dp(6),
+                        padding=[dp(10)])
+        pop = Popup(title="Состояние прибора", content=box,
+                    size_hint=(0.8, 0.55))
+        colors = {
+            "installed": C["ok"],
+            "removed": C["text_light"],
+            "verification": C["warning"],
+            "reserve": C["primary"],
+            "taken_from_verification": C["primary_dark"],
+        }
+        for key, label in STATES:
+            b = Button(text=label, bold=True, font_size="16sp",
+                       background_normal="",
+                       background_color=colors[key],
+                       size_hint_y=None, height=dp(52))
+            b.bind(on_release=lambda *a, k=key, p=pop: (self._set_state(k),
+                                                        p.dismiss()))
+            box.add_widget(b)
+        pop.open()
+
+    def _set_state(self, key):
+        self._edit_state = key
         self._update_state_btn()
 
     def _update_state_btn(self):
@@ -921,6 +983,8 @@ class EquipmentApp(App):
             "installed": ("Установлен", C["ok"]),
             "removed": ("Снят", C["text_light"]),
             "verification": ("На поверке", C["warning"]),
+            "reserve": ("В резерве", C["primary"]),
+            "taken_from_verification": ("Забрали с поверки", C["primary_dark"]),
         }[cur]
         self.state_label_btn.text = label
         self.state_label_btn.background_color = color
@@ -1202,7 +1266,27 @@ class EquipmentApp(App):
         for r in self.records:
             if r.get("deleted"):
                 continue
-            if (r.get("state") or "installed") == "verification":
+            if (r.get("state") or "installed") != "verification":
+                continue
+            # Только АКТУАЛЬНО на поверке: нет более поздней записи
+            # (установлен/снят/в резерве) по тому же зав. номеру/названию
+            serial = (r.get("serial") or "").strip()
+            name = (r.get("name") or "").strip()
+            my_key = (r.get("added") or "", r.get("id", 0))
+            superseded = False
+            for o in self.records:
+                if o is r or o.get("deleted"):
+                    continue
+                o_serial = (o.get("serial") or "").strip()
+                o_name = (o.get("name") or "").strip()
+                same = (serial and o_serial == serial) or \
+                       (not serial and name and o_name == name)
+                if not same:
+                    continue
+                if (o.get("added") or "", o.get("id", 0)) > my_key:
+                    superseded = True
+                    break
+            if not superseded:
                 items.append(r)
         items.sort(key=lambda r: (r.get("added") or "", -r.get("id", 0)),
                    reverse=True)
