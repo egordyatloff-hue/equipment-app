@@ -102,6 +102,7 @@ class SyncClient:
     # ---------- синхронизация ----------
     def sync_now(self):
         """Push локальных -> pull серверных. Возвращает (ok, message)."""
+        print("SYNC: starting, configured=%s" % self.configured())
         if not self.configured():
             return False, "Сервер не настроен"
         try:
@@ -112,12 +113,15 @@ class SyncClient:
                      if (r.get("updated_at") or "") > since_push]
             payload = {"device_id": device_id(),
                        "records": dirty if dirty else self.app.records}
+            print("SYNC: push sent, dirty=%d, total=%d" % (len(dirty), len(self.app.records)))
             res = self._post("/push", payload)
+            print("SYNC: push result:", res)
             st["last_push"] = now_iso()
             save_state(st)
 
             # PULL: применяем чужие изменения
             pulled = self._pull_all()
+            print("SYNC: pulled", pulled)
             self.last_sync = now_iso()
             self.last_error = ""
             st = load_state()
@@ -127,7 +131,8 @@ class SyncClient:
             save_state(st)
             return True, "push %d, pull %d" % (res.get("pushed", 0), pulled)
         except HTTPError as e:
-            msg = "HTTP %s" % e.code
+            msg = "HTTP %s: %s" % (e.code, e.read()[:200] if hasattr(e, 'read') else '')
+            print("SYNC ERROR:", msg)
             self.last_error = msg
             return False, msg
         except (URLError, ssl.SSLError, OSError) as e:
