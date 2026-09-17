@@ -728,7 +728,10 @@ class EquipmentApp(App):
 
     def save_and_refresh(self):
         save_records(self.records)
-        self.refresh_all()
+        # refresh_all трогает UI - из фонового потока (синхронизация)
+        # это запрещено, поэтому планируем в главном потоке Kivy
+        from kivy.clock import Clock
+        Clock.schedule_once(lambda dt: self.refresh_all(), 0)
 
     # ---------- построение UI ----------
     def build_static(self):
@@ -759,24 +762,31 @@ class EquipmentApp(App):
         self.sync_client.sync_now()
 
     def _top_bar(self):
-        bar = BoxLayout(size_hint_y=None, height=dp(64), spacing=dp(6),
+        box = BoxLayout(size_hint_y=None, height=dp(128), spacing=dp(6),
+                        orientation="vertical",
                         padding=[dp(8), dp(8), dp(8), 0])
 
-        def tb(text, color, cb, hx):
+        row = BoxLayout(spacing=dp(6))
+
+        def tb(parent, text, color, cb, hx):
             b = Button(text=text, bold=True, background_normal="",
                        background_color=color, font_size="16sp",
                        on_release=cb)
             b.size_hint_x = hx
-            bar.add_widget(b)
+            parent.add_widget(b)
             return b
 
-        tb("+ Добавить", C["primary"], lambda *a: self.open_add(), 1.0)
-        self.due_btn = tb("! Месяц", C["warning"],
-                          lambda *a: self.open_due(), 0.85)
-        tb("На поверке", C["accent"], lambda *a: self.open_verification(), 0.95)
-        tb("Excel", C["primary_dark"], lambda *a: self.export_to_excel(), 0.55)
-        tb("Обновл.", C["text_light"], lambda *a: self.check_updates(), 0.62)
-        return bar
+        self.due_btn = tb(row, "Месяц", C["warning"],
+                          lambda *a: self.open_due(), 1.0)
+        tb(row, "На поверке", C["accent"], lambda *a: self.open_verification(), 1.1)
+        tb(row, "Excel", C["primary_dark"], lambda *a: self.export_to_excel(), 0.7)
+        tb(row, "⟳", C["text_light"], lambda *a: self.check_updates(), 0.45)
+        box.add_widget(row)
+
+        row2 = BoxLayout(spacing=dp(6))
+        tb(row2, "+ Добавить", C["primary"], lambda *a: self.open_add(), 1.0)
+        box.add_widget(row2)
+        return box
 
     def _bg_panel(self, box):
         with box.canvas.before:
@@ -1115,7 +1125,7 @@ class EquipmentApp(App):
             elif st == "red":
                 n_red += 1
         if hasattr(self, "due_btn"):
-            self.due_btn.text = ("! Месяц (%d)" % n_due) if n_due else "! Месяц"
+            self.due_btn.text = ("Месяц (%d)" % n_due) if n_due else "Месяц"
             self.due_btn.background_color = C["warning"] if (n_due or n_red) else C["text_light"]
         self.refresh_list()
 
