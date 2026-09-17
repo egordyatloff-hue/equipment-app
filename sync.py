@@ -79,6 +79,7 @@ class SyncClient:
 
     # ---------- низкий уровень ----------
     def _post(self, path, payload):
+        print("SYNC: _post %s" % path, flush=True)
         req = Request(
             self.server_url + path,
             data=json.dumps(payload).encode("utf-8"),
@@ -87,11 +88,13 @@ class SyncClient:
                 "Authorization": "Bearer " + self.token,
             },
             method="POST")
+        print("SYNC: _post request created", flush=True)
         ctx = ssl.create_default_context()
         with urlopen(req, timeout=20, context=ctx) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
     def _get(self, path):
+        print("SYNC: _get %s" % path, flush=True)
         req = Request(
             self.server_url + path,
             headers={"Authorization": "Bearer " + self.token})
@@ -102,7 +105,7 @@ class SyncClient:
     # ---------- синхронизация ----------
     def sync_now(self):
         """Push локальных -> pull серверных. Возвращает (ok, message)."""
-        print("SYNC: starting, configured=%s" % self.configured())
+        print("SYNC: starting, configured=%s" % self.configured(), flush=True)
         if not self.configured():
             return False, "Сервер не настроен"
         try:
@@ -113,15 +116,15 @@ class SyncClient:
                      if (r.get("updated_at") or "") > since_push]
             payload = {"device_id": device_id(),
                        "records": dirty if dirty else self.app.records}
-            print("SYNC: push sent, dirty=%d, total=%d" % (len(dirty), len(self.app.records)))
+            print("SYNC: push sent, dirty=%d, total=%d" % (len(dirty), len(self.app.records)), flush=True)
             res = self._post("/push", payload)
-            print("SYNC: push result:", res)
+            print("SYNC: push result:", res, flush=True)
             st["last_push"] = now_iso()
             save_state(st)
 
             # PULL: применяем чужие изменения
             pulled = self._pull_all()
-            print("SYNC: pulled", pulled)
+            print("SYNC: pulled", pulled, flush=True)
             self.last_sync = now_iso()
             self.last_error = ""
             st = load_state()
@@ -132,7 +135,7 @@ class SyncClient:
             return True, "push %d, pull %d" % (res.get("pushed", 0), pulled)
         except HTTPError as e:
             msg = "HTTP %s: %s" % (e.code, e.read()[:200] if hasattr(e, 'read') else '')
-            print("SYNC ERROR:", msg)
+            print("SYNC ERROR:", msg, flush=True)
             self.last_error = msg
             return False, msg
         except (URLError, ssl.SSLError, OSError) as e:
