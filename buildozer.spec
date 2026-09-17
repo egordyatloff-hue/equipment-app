@@ -5,7 +5,7 @@ package.domain = org.equipment
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas
 version = 1.0
-requirements = python3,kivy==2.3.1,openpyxl==3.1.5,et_xmlfile==2.0.0
+requirements = python3,kivy==2.3.1,filetype,openpyxl==3.1.5,et_xmlfile==2.0.0
 p4a.branch = release-2024.01.21
 orientation = portrait
 fullscreen = 0

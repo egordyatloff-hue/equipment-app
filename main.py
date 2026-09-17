@@ -79,6 +79,20 @@ STATE_LABELS = dict(STATES)
 
 # ------------------------- данные -------------------------
 
+def crash_log_path():
+    """Путь для crash.log: открытая пользователю папка на Android."""
+    if platform == "android":
+        for cand in ("/sdcard/Documents", "/sdcard/Download"):
+            try:
+                if os.path.isdir(cand):
+                    return os.path.join(cand, "equipment_crash.log")
+            except Exception:
+                continue
+        return "/sdcard/equipment_crash.log"
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "equipment_crash.log")
+
+
 def data_dir():
     if platform == "android":
         try:
@@ -1224,9 +1238,9 @@ if __name__ == "__main__":
         EquipmentApp().run()
     except Exception:
         err = traceback.format_exc()
-        # Сохранить лог в корень хранилища, чтобы можно было снять с телефона
+        # Сохранить лог в доступную папку, чтобы можно было снять с телефона
         try:
-            log_path = os.path.join(data_dir(), "crash.log")
+            log_path = crash_log_path()
             with open(log_path, "w", encoding="utf-8") as f:
                 f.write(err)
             print("CRASH LOG SAVED:", log_path)
