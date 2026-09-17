@@ -17,12 +17,17 @@ from datetime import datetime, timezone
 from kivy.utils import platform
 
 try:
-    from urllib.request import urlopen, Request
+    from urllib.request import urlopen, Request, build_opener, ProxyHandler
     from urllib.error import URLError, HTTPError
 except ImportError:
     pass
 
 STATE_FILE = "sync_state.json"
+
+# На Android urlopen зависает при автоопределении системного прокси.
+# Отключаем прокси явно через свой opener.
+_opener = build_opener(ProxyHandler({}))
+
 
 # Адрес сервера и токен задаются при сборке (см. SERVER_URL / API_TOKEN)
 SERVER_URL = "https://rezzonvoice.ru/api"
@@ -90,7 +95,7 @@ class SyncClient:
             method="POST")
         print("SYNC: _post request created", flush=True)
         ctx = ssl.create_default_context()
-        with urlopen(req, timeout=20, context=ctx) as resp:
+        with _opener.open(req, timeout=20) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
     def _get(self, path):
@@ -99,7 +104,7 @@ class SyncClient:
             self.server_url + path,
             headers={"Authorization": "Bearer " + self.token})
         ctx = ssl.create_default_context()
-        with urlopen(req, timeout=20, context=ctx) as resp:
+        with _opener.open(req, timeout=20) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
     # ---------- синхронизация ----------
@@ -198,7 +203,7 @@ def check_update():
         req = Request(SERVER_URL + "/version",
                       headers={"Authorization": "Bearer " + API_TOKEN})
         ctx = ssl.create_default_context()
-        with urlopen(req, timeout=10, context=ctx) as resp:
+        with _opener.open(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         ver = str(data.get("version", "")).strip()
         apk = str(data.get("apk_url", "")).strip()
@@ -213,7 +218,7 @@ def download_update(apk_url, dest_path, progress_cb=None):
     """Скачать APK с сервера. progress_cb(loaded_bytes, total_bytes)."""
     req = Request(apk_url, headers={"Authorization": "Bearer " + API_TOKEN})
     ctx = ssl.create_default_context()
-    with urlopen(req, timeout=60, context=ctx) as resp:
+    with _opener.open(req, timeout=60) as resp:
         total = int(resp.headers.get("Content-Length") or 0)
         done = 0
         with open(dest_path, "wb") as f:
