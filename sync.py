@@ -112,7 +112,7 @@ class SyncClient:
                      if (r.get("updated_at") or "") > since_push]
             payload = {"device_id": device_id(),
                        "records": dirty if dirty else self.app.records}
-            res = self._post("/api/push", payload)
+            res = self._post("/push", payload)
             st["last_push"] = now_iso()
             save_state(st)
 
@@ -143,7 +143,7 @@ class SyncClient:
         total = 0
         cursor = self.cursor
         for _ in range(10):  # максимум 10 страниц
-            res = self._get("/api/pull?since=" + cursor)
+            res = self._get("/pull?since=" + cursor)
             recs = res.get("records", [])
             if not recs:
                 break
@@ -187,7 +187,7 @@ def check_update():
     if "CHANGE-ME" in SERVER_URL:
         return None, None
     try:
-        req = Request(SERVER_URL + "/api/version",
+        req = Request(SERVER_URL + "/version",
                       headers={"Authorization": "Bearer " + API_TOKEN})
         ctx = ssl.create_default_context()
         with urlopen(req, timeout=10, context=ctx) as resp:
