@@ -645,6 +645,10 @@ class DueScreen(Screen):
     pass
 
 
+class VerificationScreen(Screen):
+    pass
+
+
 class Root(BoxLayout):
     pass
 
@@ -676,6 +680,7 @@ class EquipmentApp(App):
         self.sm.add_widget(ListScreen(name="list"))
         self.sm.add_widget(EditScreen(name="edit"))
         self.sm.add_widget(DueScreen(name="due"))
+        self.sm.add_widget(VerificationScreen(name="verification"))
         Clock.schedule_once(lambda dt: self.build_static(), 0)
         return root
 
@@ -689,6 +694,7 @@ class EquipmentApp(App):
             self._build_list_screen(self.sm.get_screen("list"))
             self._build_edit_screen(self.sm.get_screen("edit"))
             self._build_due_screen(self.sm.get_screen("due"))
+            self._build_verification_screen(self.sm.get_screen("verification"))
             self.show_list()
             Clock.schedule_interval(self.periodic_sync, 300)
         except Exception:
@@ -725,8 +731,9 @@ class EquipmentApp(App):
         tb("+ Добавить", C["primary"], lambda *a: self.open_add(), 1.0)
         self.due_btn = tb("! Месяц", C["warning"],
                           lambda *a: self.open_due(), 0.85)
-        tb("Excel", C["accent"], lambda *a: self.export_to_excel(), 0.55)
-        tb("Обновл.", C["primary_dark"], lambda *a: self.check_updates(), 0.62)
+        tb("На поверке", C["accent"], lambda *a: self.open_verification(), 0.95)
+        tb("Excel", C["primary_dark"], lambda *a: self.export_to_excel(), 0.55)
+        tb("Обновл.", C["text_light"], lambda *a: self.check_updates(), 0.62)
         return bar
 
     def _bg_panel(self, box):
@@ -869,6 +876,35 @@ class EquipmentApp(App):
         self.due_container.bind(minimum_height=lambda w, h: setattr(w, "height", h))
         self.due_scroll.add_widget(self.due_container)
         box.add_widget(self.due_scroll)
+        scr.add_widget(box)
+
+    def _build_verification_screen(self, scr):
+        scr.clear_widgets()
+        box = BoxLayout(orientation="vertical")
+        self._bg_panel(box)
+
+        top = BoxLayout(size_hint_y=None, height=dp(64),
+                        padding=[dp(8), dp(8), dp(8), 0])
+        top.add_widget(Button(text="< Назад к списку", bold=True, font_size="16sp",
+                              background_normal="",
+                              background_color=C["text_light"],
+                              on_release=lambda *a: self.show_list()))
+        box.add_widget(top)
+
+        verwrap = BoxLayout(size_hint_y=None, height=dp(28),
+                            padding=[dp(14), 0, dp(14), 0])
+        self.verif_label = AutoLabel(text="", bold=True, font_size="19sp",
+                                     color=C["primary_dark"], halign="left")
+        verwrap.add_widget(self.verif_label)
+        box.add_widget(verwrap)
+
+        self.verif_scroll = ScrollView(bar_width=dp(4))
+        self.verif_container = BoxLayout(orientation="vertical",
+                                         size_hint_y=None, spacing=dp(6),
+                                         padding=[dp(8), dp(4), dp(8), dp(16)])
+        self.verif_container.bind(minimum_height=lambda w, h: setattr(w, "height", h))
+        self.verif_scroll.add_widget(self.verif_container)
+        box.add_widget(self.verif_scroll)
         scr.add_widget(box)
 
     # ---------- вспомогательное ----------
@@ -1153,6 +1189,32 @@ class EquipmentApp(App):
         self.due_month = month
         self.refresh_due()
         self.sm.current = "due"
+
+    def open_verification(self):
+        self.refresh_verification()
+        self.sm.current = "verification"
+
+    def refresh_verification(self):
+        if not hasattr(self, "verif_container"):
+            return
+        self.verif_container.clear_widgets()
+        items = []
+        for r in self.records:
+            if r.get("deleted"):
+                continue
+            if (r.get("state") or "installed") == "verification":
+                items.append(r)
+        items.sort(key=lambda r: (r.get("added") or "", -r.get("id", 0)),
+                   reverse=True)
+        self.verif_label.text = "На поверке: %d" % len(items)
+        if not items:
+            self.verif_container.add_widget(AutoLabel(
+                text="Нет приборов со состоянием\n«На поверке».",
+                halign="center", color=C["text_light"], font_size="15sp"))
+        for r in items:
+            card = RecordCard(r, self)
+            card.reason_text = "на поверке"
+            self.verif_container.add_widget(card)
 
     # ---------- CRUD ----------
     def save_record(self, as_new=False):
