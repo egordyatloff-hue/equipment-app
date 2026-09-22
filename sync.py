@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from kivy.utils import platform
 
 try:
-    from urllib.request import urlopen, Request, build_opener, ProxyHandler
+    from urllib.request import urlopen, Request, build_opener, ProxyHandler, HTTPSHandler
     from urllib.error import URLError, HTTPError
 except ImportError:
     pass
@@ -26,7 +26,7 @@ STATE_FILE = "sync_state.json"
 
 # На Android urlopen зависает при автоопределении системного прокси.
 # Отключаем прокси явно через свой opener.
-_opener = build_opener(ProxyHandler({}))
+_opener = build_opener(ProxyHandler({}), HTTPSHandler(context=_ssl_ctx))
 
 # Android не имеет системных CA-корней для Python. Используем certifi.
 try:
