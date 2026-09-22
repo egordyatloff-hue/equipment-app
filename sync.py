@@ -24,16 +24,16 @@ except ImportError:
 
 STATE_FILE = "sync_state.json"
 
-# На Android urlopen зависает при автоопределении системного прокси.
-# Отключаем прокси явно через свой opener.
-_opener = build_opener(ProxyHandler({}), HTTPSHandler(context=_ssl_ctx))
-
 # Android не имеет системных CA-корней для Python. Используем certifi.
 try:
     import certifi
     _ssl_ctx = ssl.create_default_context(cafile=certifi.where())
 except Exception:
     _ssl_ctx = ssl.create_default_context()
+
+# На Android urlopen зависает при автоопределении системного прокси.
+# Отключаем прокси явно через свой opener с явным HTTPS-хендлером.
+_opener = build_opener(ProxyHandler({}), HTTPSHandler(context=_ssl_ctx))
 
 
 # Адрес сервера и токен задаются при сборке (см. SERVER_URL / API_TOKEN)
