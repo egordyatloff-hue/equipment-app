@@ -83,8 +83,33 @@ class SyncClient:
                 and bool(self.server_url) and bool(self.token))
 
     # ---------- низкий уровень ----------
+    def _raw_connect_test(self):
+        """Диагностика: DNS + TCP + SSL по шагам."""
+        import socket
+        host = "rezzonvoice.ru"
+        try:
+            print("NET-TEST: getaddrinfo...", flush=True)
+            infos = socket.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM)
+            print("NET-TEST: dns OK %s" % infos[0][4], flush=True)
+            s = socket.create_connection((host, 443), timeout=10)
+            print("NET-TEST: tcp OK", flush=True)
+            import ssl as _ssl
+            ctx = _ssl.create_default_context()
+            ss = ctx.wrap_socket(s, server_hostname=host)
+            print("NET-TEST: ssl OK %s" % ss.version(), flush=True)
+            ss.sendall(b"GET /api/health HTTP/1.1\r\nHost: rezzonvoice.ru\r\nConnection: close\r\n\r\n")
+            data = ss.recv(500)
+            print("NET-TEST: response %s" % data[:80], flush=True)
+            ss.close()
+            return True
+        except Exception as e:
+            print("NET-TEST FAIL: %r" % e, flush=True)
+            return False
+
     def _post(self, path, payload):
         print("SYNC: _post %s" % path, flush=True)
+        if not self._raw_connect_test():
+            return None
         req = Request(
             self.server_url + path,
             data=json.dumps(payload).encode("utf-8"),
