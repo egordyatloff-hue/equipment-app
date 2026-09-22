@@ -28,6 +28,13 @@ STATE_FILE = "sync_state.json"
 # Отключаем прокси явно через свой opener.
 _opener = build_opener(ProxyHandler({}))
 
+# Android не имеет системных CA-корней для Python. Используем certifi.
+try:
+    import certifi
+    _ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+except Exception:
+    _ssl_ctx = ssl.create_default_context()
+
 
 # Адрес сервера и токен задаются при сборке (см. SERVER_URL / API_TOKEN)
 SERVER_URL = "https://rezzonvoice.ru/api"
@@ -119,7 +126,7 @@ class SyncClient:
             },
             method="POST")
         print("SYNC: _post request created", flush=True)
-        ctx = ssl.create_default_context()
+        ctx = _ssl_ctx
         with _opener.open(req, timeout=20) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
@@ -128,7 +135,7 @@ class SyncClient:
         req = Request(
             self.server_url + path,
             headers={"Authorization": "Bearer " + self.token})
-        ctx = ssl.create_default_context()
+        ctx = _ssl_ctx
         with _opener.open(req, timeout=20) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
@@ -227,7 +234,7 @@ def check_update():
     try:
         req = Request(SERVER_URL + "/version",
                       headers={"Authorization": "Bearer " + API_TOKEN})
-        ctx = ssl.create_default_context()
+        ctx = _ssl_ctx
         with _opener.open(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         ver = str(data.get("version", "")).strip()
