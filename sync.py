@@ -39,7 +39,7 @@ _opener = build_opener(ProxyHandler({}), HTTPSHandler(context=_ssl_ctx))
 # Адрес сервера и токен задаются при сборке (см. SERVER_URL / API_TOKEN)
 SERVER_URL = "https://rezzonvoice.ru/api"
 API_TOKEN = "hBqxlkwcoWrA65RuUaHstETn7ipOZ2801YIQD3GgSbeNmXJy"
-APP_VERSION = "1.0"
+APP_VERSION = "2.2"
 
 
 def state_path():
