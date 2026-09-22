@@ -101,7 +101,7 @@ class SyncClient:
             s = socket.create_connection((host, 443), timeout=10)
             print("NET-TEST: tcp OK", flush=True)
             import ssl as _ssl
-            ctx = _ssl.create_default_context()
+            ctx = _ssl_ctx
             ss = ctx.wrap_socket(s, server_hostname=host)
             print("NET-TEST: ssl OK %s" % ss.version(), flush=True)
             ss.sendall(b"GET /api/health HTTP/1.1\r\nHost: rezzonvoice.ru\r\nConnection: close\r\n\r\n")
@@ -249,7 +249,6 @@ def check_update():
 def download_update(apk_url, dest_path, progress_cb=None):
     """Скачать APK с сервера. progress_cb(loaded_bytes, total_bytes)."""
     req = Request(apk_url, headers={"Authorization": "Bearer " + API_TOKEN})
-    ctx = ssl.create_default_context()
     with _opener.open(req, timeout=60) as resp:
         total = int(resp.headers.get("Content-Length") or 0)
         done = 0
