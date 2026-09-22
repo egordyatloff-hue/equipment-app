@@ -90,7 +90,7 @@ class SyncClient:
         try:
             print("NET-TEST: getaddrinfo...", flush=True)
             infos = socket.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM)
-            print("NET-TEST: dns OK %s" % infos[0][4], flush=True)
+            print("NET-TEST: dns OK %s" % str(infos[0][4]), flush=True)
             s = socket.create_connection((host, 443), timeout=10)
             print("NET-TEST: tcp OK", flush=True)
             import ssl as _ssl
