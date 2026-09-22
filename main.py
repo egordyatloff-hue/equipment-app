@@ -101,7 +101,8 @@ def data_dir():
             from android.storage import app_storage_dir
             return app_storage_dir()
         except Exception:
-            return "/sdcard/Documents"
+            # запасной вариант: приватный каталог приложения
+            return "/data/user/0/org.equipment.equipment_calibration/files/app"
     return os.path.dirname(os.path.abspath(__file__))
 
 

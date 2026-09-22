@@ -39,7 +39,7 @@ _opener = build_opener(ProxyHandler({}), HTTPSHandler(context=_ssl_ctx))
 # Адрес сервера и токен задаются при сборке (см. SERVER_URL / API_TOKEN)
 SERVER_URL = "https://rezzonvoice.ru/api"
 API_TOKEN = "hBqxlkwcoWrA65RuUaHstETn7ipOZ2801YIQD3GgSbeNmXJy"
-APP_VERSION = "2.2"
+APP_VERSION = "2.3"
 
 
 def state_path():
@@ -188,7 +188,8 @@ class SyncClient:
         total = 0
         cursor = self.cursor
         for _ in range(10):  # максимум 10 страниц
-            res = self._get("/pull?since=" + cursor)
+            from urllib.parse import quote as _q
+            res = self._get("/pull?since=" + _q(cursor))
             recs = res.get("records", [])
             if not recs:
                 break
