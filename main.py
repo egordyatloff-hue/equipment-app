@@ -278,85 +278,75 @@ def days_left(d):
 def effective_status(rec, records):
     """Статус записи с учётом других записей того же заводского номера.
 
-    Правила:
-    - состояние «На поверке» -> жёлтый, пока это последнее событие по
-      прибору (даже если срок просрочен); если потом прибор вернули
-      (установлен/снят) — запись превращается в зелёную (поверка
-      завершена), а просрочки старых записей по-прежнему закрываются
-      по наличию новой даты поверки;
-    - просроченная запись становится зелёной, если по тому же заводскому
-      номеру есть более поздняя запись «На поверке» или запись с более
-      новой датой поверки; но если после «На поверке» появился
-      «Установлен»/«Снят» БЕЗ новой поверки — просрочки снова красные.
+    Правила (упрощённые, по дате поверки и состоянию):
+    - жёлтый: срок поверки истекает В ТЕКУЩЕМ месяце (независимо от
+      состояния установлен/снят) — прибор пора сдавать;
+    - красный: срок просрочен;
+    - зелёный: срок ещё далеко ИЛИ просрочка закрыта более поздним
+      событием («На поверке», «Забрали с поверки») или более новой
+      датой поверки.
+    Состояние записи (установлен/снят/...) показывается отдельно и не
+    влияет на цвет срока поверки.
     """
     d = parse_date(rec.get("verification_date", ""))
     st = status_of(d)
     state = rec.get("state") or "installed"
     serial = (rec.get("serial") or "").strip()
-
-    # Запись «Забрали с поверки» = прибор вернули из поверки: всегда ОК
-    if state == "taken_from_verification":
-        return "green"
+    my_key = (rec.get("added") or "", rec.get("id", 0))
 
     same = [o for o in records
             if o is not rec and not o.get("deleted")
             and (o.get("serial") or "").strip() == serial]
-    my_key = (rec.get("added") or "", rec.get("id", 0))
 
-    # Все записи «На поверке» того же з/н, созданные ПОЗЖЕ текущей
-    vers_after = [o for o in same
-                  if (o.get("state") or "installed") == "verification"
-                  and (o.get("added") or "", o.get("id", 0)) > my_key]
-    # Самая поздняя запись-событие того же з/н
-    latest_any_key = max(((o.get("added") or "", o.get("id", 0))
-                          for o in same), default=None)
-    # «На поверке» актуальна, если она сама является последним событием
-    my_is_ver = state == "verification"
-    latest_ver_key = max(((o.get("added") or "", o.get("id", 0))
-                          for o in same
-                          if (o.get("state") or "installed") == "verification"),
-                         default=None)
-    if my_is_ver:
-        ver_actual = latest_any_key is None or my_key >= latest_any_key
-    else:
-        ver_actual = (latest_ver_key is not None
-                      and not any((o.get("added") or "", o.get("id", 0)) > latest_ver_key
-                                  for o in same))
+    def is_ver(o):
+        return (o.get("state") or "installed") == "verification"
 
-    if my_is_ver:
-        # «На поверке» — последняя по времени запись з/н, но если после
-        # неё появились другие события — поверка завершена.
-        if ver_actual:
-            return "yellow"
-        # Завершилась ли поверка УСПЕШНО (есть запись с новой датой поверки)?
-        for o in same:
-            od = parse_date(o.get("verification_date", ""))
-            if od and d and od > d:
-                return "green"
-        # Поверка завершилась «Забрали с поверки» и прибор остался со
-        # старым сроком — считаем зелёным (прибор цел, ждёт установки)
-        later_taken = [o for o in same
-                       if (o.get("state") or "installed") == "taken_from_verification"
-                       and (o.get("added") or "", o.get("id", 0)) > my_key]
-        if later_taken:
+    def is_taken(o):
+        return (o.get("state") or "installed") == "taken_from_verification"
+
+    # 1. Запись «На поверке» — актуальна, если она последняя по прибору
+    if state == "verification":
+        later = [o for o in same
+                 if (o.get("added") or "", o.get("id", 0)) > my_key]
+        if later:
+            # после сдачи прибор уже двигали: поверка завершена
             return "green"
+        return "yellow"
+
+    # 2. «Забрали с поверки» — прибор вернули. Цвет определяется сроком
+    # поверки (если сдача в этом месяце - жёлтый), но если по прибору
+    # есть более поздние события, срок может быть закрыт.
+    if state == "taken_from_verification":
+        later = [o for o in same
+                 if (o.get("added") or "", o.get("id", 0)) > my_key]
+        if later:
+            return _plain_status(rec, records, same, my_key, d, st)
         return st
+
+    # 3. Остальные состояния: смотрим срок поверки
     if st != "red":
-        return st
-    if not serial:
-        return st
+        return st  # green (срок далеко) или yellow (срок в этом месяце)
+
+    # Просрочено: закрывается более поздними событиями прибора
+    later_events = [o for o in same
+                    if (o.get("added") or "", o.get("id", 0)) > my_key]
+    if any(is_verification(o) for o in later_events):
+        return "green"
+    if any(is_taken(o) for o in later_events):
+        return "green"
     for o in same:
         od = parse_date(o.get("verification_date", ""))
-        if od and d and od > d:
+        if od and od > d:
             return "green"
-    if vers_after and ver_actual:
-        return "green"
-    # «Забрали с поверки» по этому прибору закрывает просрочку
-    later_taken_any = [o for o in same
-                       if (o.get("state") or "installed") == "taken_from_verification"
-                       and (o.get("added") or "", o.get("id", 0)) > my_key]
-    if later_taken_any:
-        return "green"
+    return st
+
+
+def is_verification(o):
+    return (o.get("state") or "installed") == "verification"
+
+
+def _plain_status(rec, records, same, my_key, d, st):
+    """Статус по дате поверки без учёта «закрытия» (для неактуальных)."""
     return st
 
 
@@ -606,10 +596,16 @@ class RecordCard(ButtonBehavior, BoxLayout):
             if same and (o.get("added") or "", o.get("id", 0)) > my_key:
                 has_later = True
                 break
-        if rec_state == "reserve":
-            st_text, chip_bg = "В резерве", C["line"]
+        if rec_state == "reserve" and not has_later:
+            st_text = "В резерве"
         elif rec_state == "taken_from_verification" and not has_later:
-            st_text, chip_bg = "Забрали", C["line"]
+            st_text = "Забрали с поверки"
+        elif rec_state == "removed":
+            st_text = "Снят"
+        elif rec_state == "installed":
+            st_text = "Установлен"
+        elif rec_state == "verification":
+            st_text = "На поверке"
 
         with self.canvas.before:
             Color(0.16, 0.18, 0.22, 0.06)
