@@ -39,7 +39,7 @@ _opener = build_opener(ProxyHandler({}), HTTPSHandler(context=_ssl_ctx))
 # Адрес сервера и токен задаются при сборке (см. SERVER_URL / API_TOKEN)
 SERVER_URL = "https://rezzonvoice.ru/api"
 API_TOKEN = "hBqxlkwcoWrA65RuUaHstETn7ipOZ2801YIQD3GgSbeNmXJy"
-APP_VERSION = "2.3"
+APP_VERSION = "2.4"
 
 
 def state_path():
@@ -215,6 +215,13 @@ class SyncClient:
                 local[rid] = remote
                 changed = True
             else:
+                # Надгробие с сервера имеет приоритет: запись удалена
+                # на другом устройстве - удаляем локально
+                if remote.get("deleted"):
+                    if not loc.get("deleted"):
+                        changed = True
+                    local[rid] = remote
+                    continue
                 r_ts = remote.get("updated_at", "")
                 l_ts = loc.get("updated_at", "")
                 if r_ts > l_ts:

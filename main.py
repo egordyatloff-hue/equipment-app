@@ -596,16 +596,7 @@ class RecordCard(ButtonBehavior, BoxLayout):
             if same and (o.get("added") or "", o.get("id", 0)) > my_key:
                 has_later = True
                 break
-        if rec_state == "reserve" and not has_later:
-            st_text = "В резерве"
-        elif rec_state == "taken_from_verification" and not has_later:
-            st_text = "Забрали с поверки"
-        elif rec_state == "removed":
-            st_text = "Снят"
-        elif rec_state == "installed":
-            st_text = "Установлен"
-        elif rec_state == "verification":
-            st_text = "На поверке"
+        st_text = STATE_LABELS.get(rec_state, "Установлен")
 
         with self.canvas.before:
             Color(0.16, 0.18, 0.22, 0.06)
@@ -738,7 +729,8 @@ class EquipmentApp(App):
             self._build_due_screen(self.sm.get_screen("due"))
             self._build_verification_screen(self.sm.get_screen("verification"))
             self.show_list()
-            Clock.schedule_interval(self.periodic_sync, 300)
+            # Автообновление данных с сервера каждые 30 секунд
+            Clock.schedule_interval(self.periodic_sync, 30)
         except Exception:
             import traceback
             from kivy.uix.label import Label as _L
@@ -755,12 +747,22 @@ class EquipmentApp(App):
         Thread(target=lambda: self.sync_client.sync_now(),
                daemon=True).start()
 
+    def schedule_push(self, *a):
+        """Отправить изменения через 4-5 сек после действия с записью."""
+        from kivy.clock import Clock
+        Clock.unschedule(self._pending_push)
+        Clock.schedule_once(self._pending_push, 4)
+
+    def _pending_push(self, dt):
+        from threading import Thread
+        Thread(target=lambda: self.sync_client.sync_now(),
+               daemon=True).start()
+
     def periodic_sync(self, dt):
         self.sync_client.sync_now()
 
     def _top_bar(self):
-        box = BoxLayout(size_hint_y=None, height=dp(128), spacing=dp(6),
-                        orientation="vertical",
+        box = BoxLayout(size_hint_y=None, height=dp(64), spacing=dp(6),
                         padding=[dp(8), dp(8), dp(8), 0])
 
         row = BoxLayout(spacing=dp(6))
@@ -773,17 +775,45 @@ class EquipmentApp(App):
             parent.add_widget(b)
             return b
 
-        self.due_btn = tb(row, "Месяц", C["warning"],
-                          lambda *a: self.open_due(), 1.0)
-        tb(row, "На поверке", C["accent"], lambda *a: self.open_verification(), 1.1)
-        tb(row, "Excel", C["primary_dark"], lambda *a: self.export_to_excel(), 0.7)
-        tb(row, "⟳", C["text_light"], lambda *a: self.check_updates(), 0.45)
+        tb(row, "+ Добавить", C["primary"], lambda *a: self.open_add(), 1.0)
+        more_btn = Button(text="...", bold=True, font_size="26sp",
+                          background_normal="",
+                          background_color=C["primary_dark"],
+                          on_release=lambda *a: self.open_more_menu())
+        more_btn.size_hint_x = 0.22
+        row.add_widget(more_btn)
         box.add_widget(row)
-
-        row2 = BoxLayout(spacing=dp(6))
-        tb(row2, "+ Добавить", C["primary"], lambda *a: self.open_add(), 1.0)
-        box.add_widget(row2)
         return box
+
+    def open_more_menu(self):
+        """Меню «три точки»: месяц, на поверке, Excel, обновления."""
+        box = BoxLayout(orientation="vertical", spacing=dp(8),
+                        padding=[dp(10)])
+        pop = Popup(title="Меню", content=box, size_hint=(0.8, 0.8))
+        box.add_widget(Button(
+            text="Месяц", bold=True, font_size="16sp",
+            background_normal="", background_color=C["warning"],
+            size_hint_y=None, height=dp(56),
+            on_release=lambda *a: (pop.dismiss(), self.open_due())))
+        box.add_widget(Button(
+            text="На поверке", bold=True, font_size="16sp",
+            background_normal="", background_color=C["accent"],
+            size_hint_y=None, height=dp(56),
+            on_release=lambda *a: (pop.dismiss(), self.open_verification())))
+        box.add_widget(Button(
+            text="Excel", bold=True, font_size="16sp",
+            background_normal="", background_color=C["primary_dark"],
+            size_hint_y=None, height=dp(56),
+            on_release=lambda *a: (pop.dismiss(), self.export_to_excel())))
+        box.add_widget(Button(
+            text="Проверить обновления", bold=True, font_size="16sp",
+            background_normal="", background_color=C["primary"],
+            size_hint_y=None, height=dp(56),
+            on_release=lambda *a: (pop.dismiss(), self.check_updates())))
+        box.add_widget(Button(
+            text="Закрыть", size_hint_y=None, height=dp(48),
+            on_release=lambda *a: pop.dismiss()))
+        pop.open()
 
     def _bg_panel(self, box):
         with box.canvas.before:
@@ -986,13 +1016,16 @@ class EquipmentApp(App):
 
     def _update_state_btn(self):
         cur = getattr(self, "_edit_state", "installed")
-        label, color = {
-            "installed": ("Установлен", C["ok"]),
-            "removed": ("Снят", C["text_light"]),
-            "verification": ("На поверке", C["warning"]),
-            "reserve": ("В резерве", C["primary"]),
-            "taken_from_verification": ("Забрали с поверки", C["primary_dark"]),
-        }[cur]
+        labels = dict(STATES)
+        colors = {
+            "installed": C["ok"],
+            "removed": C["text_light"],
+            "verification": C["warning"],
+            "reserve": C["primary"],
+            "taken_from_verification": C["primary_dark"],
+        }
+        label = labels.get(cur, cur)
+        color = colors.get(cur, C["text_light"])
         self.state_label_btn.text = label
         self.state_label_btn.background_color = color
 
@@ -1347,6 +1380,7 @@ class EquipmentApp(App):
         else:
             self.records.append(data)
         save_records(self.records)
+        self.schedule_push()
         self.show_list()
 
     def delete_record(self):
@@ -1366,6 +1400,7 @@ class EquipmentApp(App):
                     r["updated_at"] = now_iso()
                     break
             save_records(self.records)
+            self.schedule_push()
             pop.dismiss()
             self.show_list()
 
