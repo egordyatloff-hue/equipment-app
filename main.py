@@ -53,6 +53,7 @@ C = {
     "ok": get_color_from_hex("#2E7D32"),
     "text": get_color_from_hex("#212121"),
     "text_light": get_color_from_hex("#757575"),
+    "orange": get_color_from_hex("#EF6C00"),
     "white": (1, 1, 1, 1),
     "chip_green": get_color_from_hex("#C8E6C9"),
     "chip_yellow": get_color_from_hex("#FFE082"),
@@ -62,7 +63,7 @@ C = {
 }
 
 STATUS_INFO = {
-    "green": ("ОК", C["ok"], C["chip_green"]),
+    "green": ("Поверен", C["ok"], C["chip_green"]),
     "yellow": ("На поверке", C["text"], C["chip_yellow"]),
     "red": ("Просрочено", C["white"], C["danger"]),
     "none": ("Нет даты", C["text_light"], C["chip_none"]),
@@ -150,7 +151,13 @@ def export_excel(records, path):
         cell.font = head_font
         cell.alignment = thin_align
 
-    status_names = {"green": "ОК", "yellow": "В этом месяце",
+    # Всё выравнивание по левому краю (включая пустые строки 2-200)
+    left_align = Alignment(horizontal="left", vertical="center")
+    for i in range(2, 201):
+        for col in range(1, 10):
+            ws.cell(row=i, column=col).alignment = left_align
+
+    status_names = {"green": "Поверен", "yellow": "На поверке",
                     "red": "Просрочено", "none": "Нет даты"}
     status_fills = {
         "green": PatternFill("solid", fgColor="C8E6C9"),
@@ -160,26 +167,76 @@ def export_excel(records, path):
     }
 
     recs = sorted((r for r in records if not r.get("deleted")),
-                  key=lambda r: (r.get("added") or "", -r.get("id", 0)),
-                  reverse=True)
+                  key=lambda r: (r.get("added") or "", -r.get("id", 0)))
     for i, r in enumerate(recs, 2):
         d = parse_date(r.get("verification_date", ""))
         st = effective_status(r, records)
-        ws.cell(row=i, column=1, value=r.get("action_date") or "")
-        ws.cell(row=i, column=2, value=r.get("name") or "")
-        ws.cell(row=i, column=3, value=r.get("serial") or "")
-        ws.cell(row=i, column=4, value=fmt_date(d))
-        ws.cell(row=i, column=5, value=r.get("object") or "")
-        ws.cell(row=i, column=6, value=r.get("location") or "")
-        ws.cell(row=i, column=7, value=r.get("executor") or "")
+        row_fill = status_fills.get(st, PatternFill())
+        # Дата поверки — тоже окрашена цветом строки (дата = число)
+        dc = ws.cell(row=i, column=4, value=d if d else None)
+        dc.fill = row_fill
+        dc.number_format = "DD.MM.YYYY"
+        ws.cell(row=i, column=1, value=r.get("action_date") or "").fill = row_fill
+        ws.cell(row=i, column=2, value=r.get("name") or "").fill = row_fill
+        ws.cell(row=i, column=3, value=r.get("serial") or "").fill = row_fill
+        ws.cell(row=i, column=5, value=r.get("object") or "").fill = row_fill
+        ws.cell(row=i, column=6, value=r.get("location") or "").fill = row_fill
+        ws.cell(row=i, column=7, value=r.get("executor") or "").fill = row_fill
         ws.cell(row=i, column=8,
-                value=STATE_LABELS.get(r.get("state") or "installed", ""))
+                value=STATE_LABELS.get(r.get("state") or "installed", "")).fill = row_fill
         c = ws.cell(row=i, column=9, value=status_names.get(st, ""))
-        c.fill = status_fills.get(st, PatternFill())
+        c.fill = row_fill
 
     widths = [14, 30, 18, 14, 20, 20, 20, 16, 16]
     for col, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(col)].width = w
+
+    # Выпадающий список состояний в колонке H (Состояние):
+    # применяется на 200 строк вниз, чтобы новые записи тоже имели выбор
+    from openpyxl.worksheet.datavalidation import DataValidation
+    state_values = ",".join(STATE_LABELS[k] for k in
+                            ("installed", "removed", "verification",
+                             "reserve", "taken_from_verification"))
+    dv = DataValidation(type="list", formula1='"%s"' % state_values,
+                        allow_blank=True, showDropDown=False)
+    dv.error = "Выберите состояние из списка"
+    dv.errorTitle = "Недопустимое состояние"
+    ws.add_data_validation(dv)
+    dv.add("H2:H200")
+
+    # Статус (I) — значение для существующих строк; для будущих записей
+    # предусмотрены условное форматирование и выпадающий список
+    for i, r in enumerate(recs, 2):
+        st = effective_status(r, records)
+        c = ws.cell(row=i, column=9, value=status_names.get(st, ""))
+        c.fill = status_fills.get(st, PatternFill())
+
+    # Условное форматирование: цвет строки по дате поверки и состоянию
+    # (работает и для записей, добавленных вручную в Excel)
+    from openpyxl.formatting.rule import FormulaRule
+    last = max(len(recs) + 1, 2)
+    # Красный: дата поверки < сегодня (и прибор не «На поверке»)
+    red = PatternFill("solid", fgColor="FFCDD2")
+    yellow = PatternFill("solid", fgColor="FFE082")
+    green = PatternFill("solid", fgColor="C8E6C9")
+    ws.conditional_formatting.add(
+        "A2:I200",
+        FormulaRule(formula=['AND($B2<>"",$H2<>"На поверке",'
+                             'ISNUMBER($D2),$D2<TODAY())'], fill=red,
+                    stopIfTrue=False))
+    ws.conditional_formatting.add(
+        "A2:I200",
+        FormulaRule(formula=['AND($B2<>"",OR($H2="На поверке",'
+                             'AND(ISNUMBER($D2),'
+                             'TEXT($D2,"MMYYYY")=TEXT(TODAY(),"MMYYYY"))))'],
+                    fill=yellow, stopIfTrue=False))
+    ws.conditional_formatting.add(
+        "A2:I200",
+        FormulaRule(formula=['AND($B2<>"",$H2<>"На поверке",'
+                             'ISNUMBER($D2),$D2>=TODAY(),'
+                             'TEXT($D2,"MMYYYY")<>TEXT(TODAY(),"MMYYYY"))'],
+                    fill=green, stopIfTrue=False))
+
     ws.freeze_panes = "A2"
     # Автофильтр: стрелки фильтрации/поиска в шапке каждого столбца
     ws.auto_filter.ref = "A1:I%d" % max(1, len(recs) + 1)
@@ -304,7 +361,9 @@ def effective_status(rec, records):
     def is_taken(o):
         return (o.get("state") or "installed") == "taken_from_verification"
 
-    # 1. Запись «На поверке» — актуальна, если она последняя по прибору
+    # 1. Запись «На поверке» — всегда ЖЁЛТАЯ, пока она последняя
+    # по прибору (прибор физически в поверке — не может быть
+    # «поверен» или «просрочен», срок подтянется после возврата)
     if state == "verification":
         later = [o for o in same
                  if (o.get("added") or "", o.get("id", 0)) > my_key]
@@ -679,6 +738,14 @@ class VerificationScreen(Screen):
     pass
 
 
+class ToVerifyScreen(Screen):
+    pass
+
+
+class OverdueScreen(Screen):
+    pass
+
+
 class Root(BoxLayout):
     pass
 
@@ -711,6 +778,8 @@ class EquipmentApp(App):
         self.sm.add_widget(EditScreen(name="edit"))
         self.sm.add_widget(DueScreen(name="due"))
         self.sm.add_widget(VerificationScreen(name="verification"))
+        self.sm.add_widget(ToVerifyScreen(name="toverify"))
+        self.sm.add_widget(OverdueScreen(name="overdue"))
         Clock.schedule_once(lambda dt: self.build_static(), 0)
         return root
 
@@ -728,6 +797,8 @@ class EquipmentApp(App):
             self._build_edit_screen(self.sm.get_screen("edit"))
             self._build_due_screen(self.sm.get_screen("due"))
             self._build_verification_screen(self.sm.get_screen("verification"))
+            self._build_toverify_screen(self.sm.get_screen("toverify"))
+            self._build_overdue_screen(self.sm.get_screen("overdue"))
             self.show_list()
             # Автообновление данных с сервера каждые 30 секунд
             Clock.schedule_interval(self.periodic_sync, 30)
@@ -761,6 +832,24 @@ class EquipmentApp(App):
     def periodic_sync(self, dt):
         self.sync_client.sync_now()
 
+    def manual_sync(self, *a):
+        """Принудительная синхронизация данных с сервером."""
+        self._popup("Синхронизация", "Обмениваюсь данными с сервером...")
+        from threading import Thread
+
+        def work():
+            ok, msg = self.sync_client.sync_now()
+            Clock.schedule_once(lambda dt: self._sync_done(ok, msg), 0)
+
+        Thread(target=work, daemon=True).start()
+
+    def _sync_done(self, ok, msg):
+        self.refresh_all()
+        if ok:
+            self._popup("Синхронизация", "Готово")
+        else:
+            self._popup("Ошибка синхронизации", msg)
+
     def _top_bar(self):
         box = BoxLayout(size_hint_y=None, height=dp(64), spacing=dp(6),
                         padding=[dp(8), dp(8), dp(8), 0])
@@ -786,32 +875,28 @@ class EquipmentApp(App):
         return box
 
     def open_more_menu(self):
-        """Меню «три точки»: месяц, на поверке, Excel, обновления."""
-        box = BoxLayout(orientation="vertical", spacing=dp(8),
-                        padding=[dp(10)])
-        pop = Popup(title="Меню", content=box, size_hint=(0.8, 0.8))
+        """Меню «три точки»: Просроченные, Сдать на поверку, На поверке,
+        Месяц, Excel, обновления."""
+        box = BoxLayout(orientation="vertical", spacing=dp(8))
+        pop = Popup(title="Меню", content=box, size_hint=(0.8, 0.9),
+                    padding=[dp(2)])
+
+        def add_btn(text, color, cb):
+            box.add_widget(Button(
+                text=text, bold=True, font_size="16sp",
+                background_normal="", background_color=color,
+                size_hint_y=None, height=dp(56),
+                on_release=lambda *a: (pop.dismiss(), cb())))
+
+        add_btn("Просроченные", C["danger"], self.open_overdue)
+        add_btn("Сдать на поверку", C["orange"], self.open_to_verify)
+        add_btn("На поверке", C["warning"], self.open_verification)
+        add_btn("Месяц", C["primary"], self.open_due)
+        add_btn("Excel", C["primary_dark"], self.export_to_excel)
+        add_btn("Обновить данные", C["accent"], self.manual_sync)
+        add_btn("Проверить обновления", C["primary"], self.check_updates)
         box.add_widget(Button(
-            text="Месяц", bold=True, font_size="16sp",
-            background_normal="", background_color=C["warning"],
-            size_hint_y=None, height=dp(56),
-            on_release=lambda *a: (pop.dismiss(), self.open_due())))
-        box.add_widget(Button(
-            text="На поверке", bold=True, font_size="16sp",
-            background_normal="", background_color=C["accent"],
-            size_hint_y=None, height=dp(56),
-            on_release=lambda *a: (pop.dismiss(), self.open_verification())))
-        box.add_widget(Button(
-            text="Excel", bold=True, font_size="16sp",
-            background_normal="", background_color=C["primary_dark"],
-            size_hint_y=None, height=dp(56),
-            on_release=lambda *a: (pop.dismiss(), self.export_to_excel())))
-        box.add_widget(Button(
-            text="Проверить обновления", bold=True, font_size="16sp",
-            background_normal="", background_color=C["primary"],
-            size_hint_y=None, height=dp(56),
-            on_release=lambda *a: (pop.dismiss(), self.check_updates())))
-        box.add_widget(Button(
-            text="Закрыть", size_hint_y=None, height=dp(48),
+            text="Закрыть", size_hint_y=None, height=dp(44),
             on_release=lambda *a: pop.dismiss()))
         pop.open()
 
@@ -984,6 +1069,68 @@ class EquipmentApp(App):
         self.verif_container.bind(minimum_height=lambda w, h: setattr(w, "height", h))
         self.verif_scroll.add_widget(self.verif_container)
         box.add_widget(self.verif_scroll)
+        scr.add_widget(box)
+
+    def _build_toverify_screen(self, scr):
+        scr.clear_widgets()
+        box = BoxLayout(orientation="vertical")
+        self._bg_panel(box)
+
+        top = BoxLayout(size_hint_y=None, height=dp(64),
+                        padding=[dp(8), dp(8), dp(8), 0])
+        top.add_widget(Button(text="< Назад к списку", bold=True,
+                              font_size="16sp", background_normal="",
+                              background_color=C["text_light"],
+                              on_release=lambda *a: self.show_list()))
+        box.add_widget(top)
+
+        tvwrap = BoxLayout(size_hint_y=None, height=dp(28),
+                           padding=[dp(14), 0, dp(14), 0])
+        self.toverify_label = AutoLabel(text="", bold=True, font_size="19sp",
+                                        color=C["primary_dark"],
+                                        halign="left")
+        tvwrap.add_widget(self.toverify_label)
+        box.add_widget(tvwrap)
+
+        self.toverify_scroll = ScrollView(bar_width=dp(4))
+        self.toverify_container = BoxLayout(
+            orientation="vertical", size_hint_y=None, spacing=dp(6),
+            padding=[dp(8), dp(4), dp(8), dp(16)])
+        self.toverify_container.bind(
+            minimum_height=lambda w, h: setattr(w, "height", h))
+        self.toverify_scroll.add_widget(self.toverify_container)
+        box.add_widget(self.toverify_scroll)
+        scr.add_widget(box)
+
+    def _build_overdue_screen(self, scr):
+        scr.clear_widgets()
+        box = BoxLayout(orientation="vertical")
+        self._bg_panel(box)
+
+        top = BoxLayout(size_hint_y=None, height=dp(64),
+                        padding=[dp(8), dp(8), dp(8), 0])
+        top.add_widget(Button(text="< Назад к списку", bold=True,
+                              font_size="16sp", background_normal="",
+                              background_color=C["text_light"],
+                              on_release=lambda *a: self.show_list()))
+        box.add_widget(top)
+
+        ovwrap = BoxLayout(size_hint_y=None, height=dp(28),
+                           padding=[dp(14), 0, dp(14), 0])
+        self.overdue_label = AutoLabel(text="", bold=True, font_size="19sp",
+                                       color=C["primary_dark"],
+                                       halign="left")
+        ovwrap.add_widget(self.overdue_label)
+        box.add_widget(ovwrap)
+
+        self.overdue_scroll = ScrollView(bar_width=dp(4))
+        self.overdue_container = BoxLayout(
+            orientation="vertical", size_hint_y=None, spacing=dp(6),
+            padding=[dp(8), dp(4), dp(8), dp(16)])
+        self.overdue_container.bind(
+            minimum_height=lambda w, h: setattr(w, "height", h))
+        self.overdue_scroll.add_widget(self.overdue_container)
+        box.add_widget(self.overdue_scroll)
         scr.add_widget(box)
 
     # ---------- вспомогательное ----------
@@ -1298,6 +1445,90 @@ class EquipmentApp(App):
         self.refresh_verification()
         self.sm.current = "verification"
 
+    def open_overdue(self):
+        self.refresh_overdue()
+        self.sm.current = "overdue"
+
+    def refresh_overdue(self):
+        """Приборы с красным статусом: срок просрочен."""
+        if not hasattr(self, "overdue_container"):
+            return
+        self.overdue_container.clear_widgets()
+        items = []
+        for r in self.records:
+            if r.get("deleted"):
+                continue
+            if effective_status(r, self.records) == "red":
+                items.append(r)
+        items.sort(key=lambda r: (r.get("added") or "", -r.get("id", 0)),
+                   reverse=True)
+        self.overdue_label.text = "Просрочено: %d" % len(items)
+        if not items:
+            self.overdue_container.add_widget(AutoLabel(
+                text="Нет просроченных приборов.",
+                halign="center", color=C["text_light"], font_size="15sp"))
+        for r in items:
+            card = RecordCard(r, self)
+            card.reason_text = "просрочено"
+            self.overdue_container.add_widget(card)
+
+    def open_to_verify(self):
+        self.refresh_toverify()
+        self.sm.current = "toverify"
+
+    def refresh_toverify(self):
+        """Приборы, которые НАДО сдать в текущем месяце (жёлтые).
+        Уже сданные (актуальное состояние «На поверке») не показываются."""
+        if not hasattr(self, "toverify_container"):
+            return
+        self.toverify_container.clear_widgets()
+        today = date.today()
+        items = []
+        for r in self.records:
+            if r.get("deleted"):
+                continue
+            # Уже сдан: состояние записи «На поверке» — не в списке сдачи
+            if (r.get("state") or "installed") == "verification":
+                continue
+            st = effective_status(r, self.records)
+            if st != "yellow":
+                continue  # не сдают в этом месяце
+            # Исключаем приборы, уже сданные на поверку (более поздняя
+            # запись «На поверке» по тому же зав. номеру)
+            serial = (r.get("serial") or "").strip()
+            name = (r.get("name") or "").strip()
+            my_key = (r.get("added") or "", r.get("id", 0))
+            on_verification = False
+            for o in self.records:
+                if o is r or o.get("deleted"):
+                    continue
+                o_serial = (o.get("serial") or "").strip()
+                o_name = (o.get("name") or "").strip()
+                same = (serial and o_serial == serial) or \
+                       (not serial and name and o_name == name)
+                if not same:
+                    continue
+                if (o.get("state") or "installed") != "verification":
+                    continue
+                o_key = (o.get("added") or "", o.get("id", 0))
+                if o_key >= my_key:
+                    on_verification = True
+                    break
+            if not on_verification:
+                items.append(r)
+        items.sort(key=lambda r: (r.get("added") or "", -r.get("id", 0)),
+                   reverse=True)
+        self.toverify_label.text = "Сдать на поверку в %02d.%d: %d" % (
+            today.month, today.year, len(items))
+        if not items:
+            self.toverify_container.add_widget(AutoLabel(
+                text="Нет приборов со сдачей на поверку\nв текущем месяце.",
+                halign="center", color=C["text_light"], font_size="15sp"))
+        for r in items:
+            card = RecordCard(r, self)
+            card.reason_text = "к сдаче в этом месяце"
+            self.toverify_container.add_widget(card)
+
     def refresh_verification(self):
         if not hasattr(self, "verif_container"):
             return
@@ -1368,7 +1599,7 @@ class EquipmentApp(App):
             "state": state,
             "action_date": ads,
             "added": (src.get("added") if editing
-                      else datetime.now().isoformat(timespec="seconds")),
+                      else now_iso()),
             "updated_at": now_iso(),
             "deleted": False,
         }

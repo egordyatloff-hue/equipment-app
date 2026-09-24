@@ -169,7 +169,7 @@ class SyncClient:
             st["last_error"] = ""
             st["cursor"] = pulled
             save_state(st)
-            return True, "push %d, pull %d" % (res.get("pushed", 0), pulled)
+            return True, "готово"
         except HTTPError as e:
             msg = "HTTP %s: %s" % (e.code, e.read()[:200] if hasattr(e, 'read') else '')
             print("SYNC ERROR:", msg, flush=True)
@@ -200,7 +200,7 @@ class SyncClient:
                 break
             cursor = new_cursor
         self.cursor = cursor
-        return total
+        return cursor  # ВАЖНО: возвращаем cursor (timestamp), а не количество
 
     def _apply_remote(self, recs):
         """Слияние: серверная версия побеждает, если она новее локальной."""
