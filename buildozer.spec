@@ -4,7 +4,7 @@ package.name = equipment_calibration
 package.domain = org.equipment
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas
-version = 2.4
+version = 1.0
 requirements = python3,kivy==2.3.1,filetype,certifi,openpyxl==3.1.5,et_xmlfile==2.0.0
 p4a.branch = release-2024.01.21
 orientation = portrait
