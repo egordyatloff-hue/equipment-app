@@ -1648,7 +1648,10 @@ class EquipmentApp(App):
               size_hint=(0.8, 0.35)).open()
 
     def _next_id(self):
-        return max((r.get("id", 0) for r in self.records), default=0) + 1
+        # id = миллисекундный timestamp: уникален глобально (несколько
+        # устройств не конфликтуют по id, на сервере нет коллизий)
+        import time as _time
+        return int(_time.time() * 1000)
 
 
 if __name__ == "__main__":
