@@ -107,6 +107,32 @@ def data_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def excel_dir(kind):
+    """Папка для Excel-файлов.
+
+    Android: /sdcard/equipment/«записи приборов» (уникальные приборы)
+    или /sdcard/equipment/«все записи». Создаётся автоматически.
+    ПК: папка приложения/excel/<kind>.
+    """
+    if platform == "android":
+        base = "/sdcard/equipment"
+        sub = {"devices": "записи приборов", "all": "все записи"}.get(kind, kind)
+        path = os.path.join(base, sub)
+        try:
+            os.makedirs(path, exist_ok=True)
+        except Exception:
+            # нет прав на общее хранилище - пишем в приватную папку
+            path = os.path.join(data_dir(), "excel", kind)
+            os.makedirs(path, exist_ok=True)
+        return path
+    base = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "..", "excel")
+    sub = {"devices": "записи приборов", "all": "все записи"}.get(kind, kind)
+    path = os.path.join(base, sub)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
 def data_path():
     return os.path.join(data_dir(), "equipment.json")
 
@@ -746,6 +772,10 @@ class OverdueScreen(Screen):
     pass
 
 
+class NoVerificationScreen(Screen):
+    pass
+
+
 class Root(BoxLayout):
     pass
 
@@ -780,6 +810,7 @@ class EquipmentApp(App):
         self.sm.add_widget(VerificationScreen(name="verification"))
         self.sm.add_widget(ToVerifyScreen(name="toverify"))
         self.sm.add_widget(OverdueScreen(name="overdue"))
+        self.sm.add_widget(NoVerificationScreen(name="noverification"))
         Clock.schedule_once(lambda dt: self.build_static(), 0)
         return root
 
@@ -799,6 +830,8 @@ class EquipmentApp(App):
             self._build_verification_screen(self.sm.get_screen("verification"))
             self._build_toverify_screen(self.sm.get_screen("toverify"))
             self._build_overdue_screen(self.sm.get_screen("overdue"))
+            self._build_noverification_screen(
+                self.sm.get_screen("noverification"))
             self.show_list()
             # Автообновление данных с сервера каждые 30 секунд
             Clock.schedule_interval(self.periodic_sync, 30)
@@ -891,6 +924,7 @@ class EquipmentApp(App):
         add_btn("Просроченные", C["danger"], self.open_overdue)
         add_btn("Сдать на поверку", C["orange"], self.open_to_verify)
         add_btn("На поверке", C["warning"], self.open_verification)
+        add_btn("Без поверки", C["text_light"], self.open_no_verification)
         add_btn("Месяц", C["primary"], self.open_due)
         add_btn("Excel", C["primary_dark"], self.export_to_excel)
         add_btn("Обновить данные", C["accent"], self.manual_sync)
@@ -939,8 +973,22 @@ class EquipmentApp(App):
 
     def _build_edit_screen(self, scr):
         scr.clear_widgets()
-        box = BoxLayout(orientation="vertical", spacing=dp(8),
-                        padding=[dp(14), dp(14), dp(14), dp(14)])
+        # ScrollView: экран растягивается, если поля не влезают;
+        # box занимает минимум высоту всего экрана (растянут по вертикали)
+        self._edit_scroll = scroll = ScrollView(bar_width=dp(4))
+        self._edit_box = box = BoxLayout(
+            orientation="vertical", spacing=dp(8),
+            padding=[dp(14), dp(14), dp(14), dp(14)],
+            size_hint=(1, None),
+            height=Window.height)
+        def _adjust_height(w, h):
+            # растянутая распорка = полноэкранный режим
+            if getattr(w, "_fullscreen_mode", True):
+                w.height = max(h, Window.height)
+            else:
+                w.height = h
+        box.bind(minimum_height=_adjust_height)
+        box._fullscreen_mode = True
         self._bg_panel(box)
 
         titlewrap = BoxLayout(size_hint_y=None, height=dp(32),
@@ -951,35 +999,42 @@ class EquipmentApp(App):
         titlewrap.add_widget(self.ed_title)
         box.add_widget(titlewrap)
 
-        self.action_field = DateField("сегодня, изменить по календарю")
-        box.add_widget(self.action_field)
-        self.in_action_date = self.action_field.input
+        # Обёртка для полей ввода (в режиме просмотра скрыта)
+        self.inputs_area = BoxLayout(orientation="vertical", spacing=dp(8),
+                                     size_hint_y=None)
+        self.inputs_area.bind(
+            minimum_height=lambda w, h: setattr(w, "height", h))
+        box.add_widget(self.inputs_area)
 
-        for attr, hint in (
-                ("in_name", "Название прибора"),
-                ("in_serial", "Заводской номер")):
-            w = TextInput(hint_text=hint, multiline=False, font_size="18sp")
+        def labeled_field(attr, label, hint, date_filter=False):
+            """Подпись над строкой + однострочная строка ввода
+            с автопереносом текста (высота растёт при переносе)."""
+            self.inputs_area.add_widget(AutoLabel(
+                text=label, bold=True, color=C["text"],
+                size_hint_y=None, height=dp(22), halign="left"))
+            w = TextInput(hint_text=hint, multiline=True,
+                          font_size="18sp", do_wrap=True)
+            if date_filter:
+                w.input_filter = _digits_filter
             w.size_hint_y = None
             w.height = dp(56)
+            # Авто-увеличение высоты при переносе текста
+            w.bind(text=lambda inst, v: self._auto_grow(inst),
+                   width=lambda inst, w_: self._auto_grow(inst))
             setattr(self, attr, w)
-            box.add_widget(w)
+            self.inputs_area.add_widget(w)
+            return w
 
-        self.in_date = TextInput(hint_text="Дата поверки",
-                                 multiline=False, font_size="18sp",
-                                 input_filter=_digits_filter)
-        self.in_date.size_hint_y = None
-        self.in_date.height = dp(56)
-        box.add_widget(self.in_date)
-
-        for attr, hint in (
-                ("in_object", "Объект"),
-                ("in_location", "Место"),
-                ("in_executor", "Исполнитель")):
-            w = TextInput(hint_text=hint, multiline=False, font_size="18sp")
-            w.size_hint_y = None
-            w.height = dp(56)
-            setattr(self, attr, w)
-            box.add_widget(w)
+        labeled_field("in_action_date", "Дата:",
+                      "сегодня, изменить по календарю", date_filter=True)
+        labeled_field("in_name", "Название:", "Название прибора")
+        labeled_field("in_serial", "Заводской номер:", "Заводской номер")
+        labeled_field("in_date", "Дата поверки:", "Дата поверки",
+                      date_filter=True)
+        labeled_field("in_object", "Объект:", "Объект")
+        labeled_field("in_location", "Место:", "Место")
+        labeled_field("in_executor", "Исполнитель:", "Исполнитель")
+        labeled_field("in_comment", "Комментарий:", "Комментарий")
 
         self.state_label_btn = Button(text="Установлен", bold=True,
                                       font_size="17sp", background_normal="",
@@ -987,32 +1042,35 @@ class EquipmentApp(App):
         self.state_label_btn.size_hint_y = None
         self.state_label_btn.height = dp(56)
         self.state_label_btn.bind(on_release=lambda *a: self.open_state_menu())
-        box.add_widget(self.state_label_btn)
+        self.inputs_area.add_widget(AutoLabel(
+            text="Состояние прибора:", bold=True, color=C["text"],
+            size_hint_y=None, height=dp(22), halign="left"))
+        self.inputs_area.add_widget(self.state_label_btn)
 
-        box.add_widget(BoxLayout())  # распорка
+        # Просмотр: текстовые поля с подписями (вместо строк ввода)
+        self.view_area = BoxLayout(orientation="vertical", spacing=dp(6),
+                                   size_hint_y=None)
+        self.view_area.bind(
+            minimum_height=lambda w, h: setattr(w, "height", h))
+        box.add_widget(self.view_area)
 
-        brow = BoxLayout(size_hint_y=None, height=dp(64), spacing=dp(8))
-        brow.add_widget(Button(text="Изменить", bold=True, font_size="17sp",
-                               background_normal="",
-                               background_color=C["ok"],
-                               on_release=lambda *a: self.save_record(False)))
-        brow.add_widget(Button(text="Создать", bold=True, font_size="17sp",
-                               background_normal="",
-                               background_color=C["primary"],
-                               on_release=lambda *a: self.save_record(True)))
-        brow.add_widget(Button(text="Отмена", font_size="17sp",
-                               background_normal="",
-                               background_color=C["text_light"],
-                               on_release=lambda *a: self.show_list()))
-        box.add_widget(brow)
+        # Распорка: растягивается и прижимает кнопки к низу экрана
+        self._spacers = [BoxLayout(size_hint_y=1)]
+        box.add_widget(self._spacers[0])
+        # Небольшой отступ после состояния прибора перед кнопками
+        box.add_widget(BoxLayout(size_hint_y=None, height=dp(14)))
 
-        self.del_btn = Button(text="Удалить запись", bold=True, font_size="16sp",
-                              background_normal="",
-                              background_color=C["danger"],
-                              size_hint_y=None, height=dp(56),
-                              on_release=lambda *a: self.delete_record())
-        box.add_widget(self.del_btn)
-        scr.add_widget(box)
+        # Область кнопок: содержимое зависит от режима экрана
+        self.btns_area = BoxLayout(orientation="vertical",
+                                   size_hint_y=None, spacing=dp(8),
+                                   padding=[0, dp(4), 0, dp(4)])
+        box.add_widget(self.btns_area)
+        self._edit_inputs = (self.in_name, self.in_serial, self.in_object,
+                             self.in_location, self.in_executor,
+                             self.in_date, self.in_action_date,
+                             self.in_comment, self.state_label_btn)
+        scroll.add_widget(box)
+        scr.add_widget(scroll)
 
     def _build_due_screen(self, scr):
         scr.clear_widgets()
@@ -1133,6 +1191,257 @@ class EquipmentApp(App):
         box.add_widget(self.overdue_scroll)
         scr.add_widget(box)
 
+    def _build_noverification_screen(self, scr):
+        scr.clear_widgets()
+        box = BoxLayout(orientation="vertical")
+        self._bg_panel(box)
+
+        top = BoxLayout(size_hint_y=None, height=dp(64),
+                        padding=[dp(8), dp(8), dp(8), 0])
+        top.add_widget(Button(text="< Назад к списку", bold=True,
+                              font_size="16sp", background_normal="",
+                              background_color=C["text_light"],
+                              on_release=lambda *a: self.show_list()))
+        box.add_widget(top)
+
+        nvwrap = BoxLayout(size_hint_y=None, height=dp(28),
+                           padding=[dp(14), 0, dp(14), 0])
+        self.noverif_label = AutoLabel(text="", bold=True, font_size="19sp",
+                                       color=C["primary_dark"],
+                                       halign="left")
+        nvwrap.add_widget(self.noverif_label)
+        box.add_widget(nvwrap)
+
+        self.noverif_scroll = ScrollView(bar_width=dp(4))
+        self.noverif_container = BoxLayout(
+            orientation="vertical", size_hint_y=None, spacing=dp(6),
+            padding=[dp(8), dp(4), dp(8), dp(16)])
+        self.noverif_container.bind(
+            minimum_height=lambda w, h: setattr(w, "height", h))
+        self.noverif_scroll.add_widget(self.noverif_container)
+        box.add_widget(self.noverif_scroll)
+        scr.add_widget(box)
+
+    def _auto_grow(self, inst):
+        """Строка ввода растёт вниз, если текст переносится на новые строки."""
+        import kivy.metrics as _m
+        try:
+            if not inst.text:
+                inst.height = _m.dp(56)
+                return
+            # Проверяем реальную ширину текста через рендер (font_size
+            # числом: "18sp" недопустим для CoreLabel)
+            from kivy.core.text import Label as CoreLabel
+            lbl = CoreLabel(font_size=_m.sp(18), text=inst.text)
+            lbl.refresh()
+            text_w, _ = lbl.texture.size
+            # Полезная ширина поля (минус паддинги ~24dp)
+            avail_w = max(inst.width - _m.dp(24), _m.dp(1))
+            n_lines = max(1, int(text_w // avail_w) + 1)
+            inst.height = max(_m.dp(56), _m.dp(50) + (n_lines - 1) * _m.dp(32))
+        except Exception:
+            # при любой проблеме оставляем стандартную высоту
+            inst.height = _m.dp(56)
+
+    # ---------- режимы экрана редактирования ----------
+    def _show_view_mode(self):
+        """Просмотр существующей записи: поля заблокированы, кнопки
+        «Редактировать» и «Назад»."""
+        self.btns_area.clear_widgets()
+        row = BoxLayout(size_hint_y=None, height=dp(64), spacing=dp(8))
+        row.add_widget(Button(text="Редактировать", bold=True,
+                              font_size="17sp", background_normal="",
+                              background_color=C["primary"],
+                              on_release=lambda *a: self._show_edit_mode()))
+        row.add_widget(Button(text="Назад", font_size="17sp",
+                              background_normal="",
+                              background_color=C["text_light"],
+                              on_release=lambda *a: self.show_list()))
+        self.btns_area.add_widget(row)
+        # Скрываем строки ввода, показываем информационный просмотр
+        self.inputs_area.clear_widgets()
+        self.inputs_area.height = 0
+        self._fill_view_mode()
+        self.view_area.height = self.view_area.minimum_height
+        for sp in getattr(self, "_spacers", []):
+            sp.size_hint_y = 1
+        if hasattr(self, "_edit_box"):
+            self._edit_box._fullscreen_mode = True
+            self._edit_box.height = Window.height
+        self.ed_title.text = "Просмотр прибора"
+
+    def _restore_inputs(self):
+        """Возвращает строки ввода в inputs_area (после clear_widgets
+        в режиме просмотра)."""
+        self.inputs_area.clear_widgets()
+        self.inputs_area.height = self.inputs_area.minimum_height
+        # Поля не пересоздаются - возвращаем их в area через add_widget
+        # (kivy re-parent), подписи восстанавливаем тоже
+        pairs = [
+            ("Дата", "in_action_date"),
+            ("Название", "in_name"),
+            ("Заводской номер", "in_serial"),
+            ("Дата поверки", "in_date"),
+            ("Объект", "in_object"),
+            ("Место", "in_location"),
+            ("Исполнитель", "in_executor"),
+            ("Комментарий", "in_comment"),
+        ]
+        for label, attr in pairs:
+            w = getattr(self, attr, None)
+            if w is None:
+                continue
+            self.inputs_area.add_widget(AutoLabel(
+                text=label + ":", bold=True, color=C["text"],
+                size_hint_y=None, height=dp(22), halign="left"))
+            self.inputs_area.add_widget(w)
+        if hasattr(self, "state_label_btn"):
+            self.inputs_area.add_widget(AutoLabel(
+                text="Состояние прибора:", bold=True, color=C["text"],
+                size_hint_y=None, height=dp(22), halign="left"))
+            self.inputs_area.add_widget(self.state_label_btn)
+        self.inputs_area.height = self.inputs_area.minimum_height
+
+    def _fill_view_mode(self):
+        """Заполнить область просмотра значениями записи.
+
+        Карточка: цветная полоска статуса слева, подписи серые мелкие,
+        значения крупные. После «Состояние» - цветной ярлык статуса."""
+        from kivy.graphics import Color as _Color, RoundedRectangle as _RR
+        self.view_area.clear_widgets()
+        rec = self.editing_rec or {}
+        st = effective_status(rec, self.records)
+        rows = [
+            ("Дата", rec.get("action_date") or "—"),
+            ("Название прибора", rec.get("name") or "—"),
+            ("Заводской номер", rec.get("serial") or "—"),
+            ("Дата поверки", rec.get("verification_date") or "—"),
+            ("Объект", rec.get("object") or "—"),
+            ("Место", rec.get("location") or "—"),
+            ("Исполнитель", rec.get("executor") or "—"),
+            ("Комментарий", rec.get("comment") or "—"),
+        ]
+
+        # Обёртка карточки
+        card = BoxLayout(orientation="horizontal", spacing=dp(10),
+                         size_hint_y=None, padding=[dp(12), dp(10)])
+        card.bind(minimum_height=lambda w, h: setattr(w, "height", h))
+        with card.canvas.before:
+            _Color(0.16, 0.18, 0.22, 0.07)
+            _RR(pos=card.pos, size=card.size, radius=[dp(10)])
+        card.bind(pos=lambda w, p_: None, size=lambda w, s_: None)
+
+        card.add_widget(ColorBar(_status_color(st)))
+
+        body = BoxLayout(orientation="vertical", spacing=dp(6),
+                         size_hint_y=None)
+        body.bind(minimum_height=lambda w, h: setattr(w, "height", h))
+        for label, value in rows:
+            body.add_widget(AutoLabel(
+                text=label, font_size="16sp", color=C["text_light"],
+                size_hint_y=None, height=dp(22), halign="left"))
+            body.add_widget(AutoLabel(
+                text=value, bold=True, font_size="22sp", color=C["text"],
+                size_hint_y=None, height=dp(30), halign="left"))
+        # Состояние - ярлыком
+        body.add_widget(AutoLabel(
+            text="Состояние", font_size="16sp", color=C["text_light"],
+            size_hint_y=None, height=dp(22), halign="left"))
+        st_text = STATE_LABELS.get(rec.get("state") or "installed",
+                                   "Установлен")
+        chip = StatusChip(STATUS_INFO[st][2], text=st_text,
+                          size_hint=(None, None), width=dp(170),
+                          height=dp(30))
+        body.add_widget(chip)
+        card.add_widget(body)
+        self.view_area.add_widget(card)
+        card.height = card.minimum_height
+        self.view_area.height = self.view_area.minimum_height
+
+    def _show_edit_mode(self):
+        """Редактирование: поля разблокированы, полный набор кнопок."""
+        self.btns_area.clear_widgets()
+        row = BoxLayout(size_hint_y=None, height=dp(64), spacing=dp(8))
+        row.add_widget(Button(text="Изменить", bold=True, font_size="17sp",
+                              background_normal="",
+                              background_color=C["ok"],
+                              on_release=lambda *a: self.confirm_edit()))
+        row.add_widget(Button(text="Создать", bold=True, font_size="17sp",
+                              background_normal="",
+                              background_color=C["primary"],
+                              on_release=lambda *a: self.save_record(True)))
+        row.add_widget(Button(text="Отмена", font_size="17sp",
+                              background_normal="",
+                              background_color=C["text_light"],
+                              on_release=lambda *a: self.show_list()))
+        self.btns_area.add_widget(row)
+        self.btns_area.add_widget(Button(
+            text="Удалить запись", bold=True, font_size="16sp",
+            background_normal="", background_color=C["danger"],
+            size_hint_y=None, height=dp(56),
+            on_release=lambda *a: self.delete_record()))
+        # Показываем строки ввода с подписями
+        self._restore_inputs()
+        self.view_area.clear_widgets()
+        self.view_area.height = 0
+        # Распорка снова растягивается (кнопки прижаты к низу)
+        for sp in getattr(self, "_spacers", []):
+            sp.size_hint_y = 1
+        if hasattr(self, "_edit_box"):
+            self._edit_box._fullscreen_mode = True
+            self._edit_box.height = Window.height
+        self.ed_title.text = "Редактирование"
+
+    def _show_new_mode(self):
+        """Новая запись: кнопки «Создать» и «Отмена» сразу под полями."""
+        self.btns_area.clear_widgets()
+        row = BoxLayout(size_hint_y=None, height=dp(64), spacing=dp(8))
+        row.add_widget(Button(text="Создать", bold=True, font_size="17sp",
+                              background_normal="",
+                              background_color=C["primary"],
+                              on_release=lambda *a: self.save_record(True)))
+        row.add_widget(Button(text="Отмена", font_size="17sp",
+                              background_normal="",
+                              background_color=C["text_light"],
+                              on_release=lambda *a: self.show_list()))
+        self.btns_area.add_widget(row)
+        self._restore_inputs()
+        self.view_area.clear_widgets()
+        self.view_area.height = 0
+        # Сжимаем распорку и высоту экрана - кнопки поднимаются
+        self._spacers = getattr(self, "_spacers", [])
+        for sp in self._spacers:
+            sp.size_hint_y = None
+            sp.height = dp(14)
+        if hasattr(self, "_edit_box"):
+            self._edit_box._fullscreen_mode = False
+            self._edit_box.height = self._edit_box.minimum_height
+        # Открываем верх формы; кнопки в конце - листаем вниз при надобности.
+        # scroll_y применяется после пересчёта layout (ленивый minimum_height)
+        if hasattr(self, "_edit_scroll"):
+            sc = self._edit_scroll
+            sc.scroll_y = 1
+            Clock.schedule_once(lambda dt: setattr(sc, "scroll_y", 1), 0.1)
+            Clock.schedule_once(lambda dt: setattr(sc, "scroll_y", 1), 0.3)
+        self.ed_title.text = "Новая запись"
+
+    def confirm_edit(self):
+        """Спросить подтверждение перед изменением записи."""
+        box = BoxLayout(orientation="vertical", spacing=dp(10),
+                        padding=[dp(10)])
+        box.add_widget(Label(text="Уверены, что хотите изменить запись?"))
+        brow = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(10))
+        pop = Popup(title="Подтверждение", content=box, size_hint=(0.8, 0.4))
+        brow.add_widget(Button(text="Да, изменить", bold=True,
+                               background_normal="",
+                               background_color=C["ok"],
+                               on_release=lambda *a: (pop.dismiss(),
+                                                      self.save_record(False))))
+        brow.add_widget(Button(text="Отмена",
+                               on_release=lambda *a: pop.dismiss()))
+        box.add_widget(brow)
+        pop.open()
+
     # ---------- вспомогательное ----------
     def open_state_menu(self):
         """Выбор состояния из списка (вместо переключения по кругу)."""
@@ -1208,15 +1517,16 @@ class EquipmentApp(App):
         try:
             stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
             if mode == "devices":
-                path = os.path.join(data_dir(),
+                path = os.path.join(excel_dir("devices"),
                                     "Приборы_список_%s.xlsx" % stamp)
                 n = export_excel_unique(self.records, path)
             else:
-                path = os.path.join(data_dir(),
+                path = os.path.join(excel_dir("all"),
                                     "Приборы_%s.xlsx" % stamp)
                 n = export_excel(self.records, path)
             self._popup("Экспорт завершён",
-                        "Файл: %s\nЗаписей: %d" % (os.path.basename(path), n))
+                        "Файл: %s\nСохранён в:\n%s\nЗаписей: %d"
+                        % (os.path.basename(path), path, n))
         except Exception as e:
             self._popup("Ошибка экспорта", str(e))
 
@@ -1407,9 +1717,7 @@ class EquipmentApp(App):
         self.in_action_date.text = date.today().strftime("%d.%m.%Y")
         self._edit_state = "installed"
         self._update_state_btn()
-        self.ed_title.text = "Новая запись"
-        self.del_btn.disabled = True
-        self.del_btn.opacity = 0.4
+        self._show_new_mode()
         self.sm.current = "edit"
 
     def open_edit(self, rec):
@@ -1419,13 +1727,13 @@ class EquipmentApp(App):
         self.in_object.text = rec.get("object", "")
         self.in_location.text = rec.get("location", "")
         self.in_executor.text = rec.get("executor", "")
+        if hasattr(self, "in_comment"):
+            self.in_comment.text = rec.get("comment", "")
         self.in_date.text = rec.get("verification_date", "")
         self.in_action_date.text = rec.get("action_date", "")
         self._edit_state = rec.get("state") or "installed"
         self._update_state_btn()
-        self.ed_title.text = "Редактирование прибора"
-        self.del_btn.disabled = False
-        self.del_btn.opacity = 1
+        self._show_view_mode()
         self.sm.current = "edit"
 
     def show_list(self):
@@ -1444,6 +1752,33 @@ class EquipmentApp(App):
     def open_verification(self):
         self.refresh_verification()
         self.sm.current = "verification"
+
+    def open_no_verification(self):
+        self.refresh_no_verification()
+        self.sm.current = "noverification"
+
+    def refresh_no_verification(self):
+        """Приборы БЕЗ даты поверки (поле пустое или нераспознаваемое)."""
+        if not hasattr(self, "noverif_container"):
+            return
+        self.noverif_container.clear_widgets()
+        items = []
+        for r in self.records:
+            if r.get("deleted"):
+                continue
+            if parse_date(r.get("verification_date", "")) is None:
+                items.append(r)
+        items.sort(key=lambda r: (r.get("added") or "", -r.get("id", 0)),
+                   reverse=True)
+        self.noverif_label.text = "Без поверки: %d" % len(items)
+        if not items:
+            self.noverif_container.add_widget(AutoLabel(
+                text="Все приборы имеют дату поверки.",
+                halign="center", color=C["text_light"], font_size="15sp"))
+        for r in items:
+            card = RecordCard(r, self)
+            card.reason_text = "без поверки"
+            self.noverif_container.add_widget(card)
 
     def open_overdue(self):
         self.refresh_overdue()
@@ -1595,6 +1930,7 @@ class EquipmentApp(App):
             "object": self.in_object.text.strip(),
             "location": self.in_location.text.strip(),
             "executor": self.in_executor.text.strip(),
+            "comment": self.in_comment.text.strip() if hasattr(self, "in_comment") else "",
             "verification_date": ds,
             "state": state,
             "action_date": ads,
