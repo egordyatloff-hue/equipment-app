@@ -1412,7 +1412,7 @@ class EquipmentApp(App):
         self._spacers = getattr(self, "_spacers", [])
         for sp in self._spacers:
             sp.size_hint_y = None
-            sp.height = dp(14)
+            sp.height = dp(28)
         if hasattr(self, "_edit_box"):
             self._edit_box._fullscreen_mode = False
             self._edit_box.height = self._edit_box.minimum_height
