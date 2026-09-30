@@ -120,10 +120,19 @@ def excel_dir(kind):
         path = os.path.join(base, sub)
         try:
             os.makedirs(path, exist_ok=True)
+            return path
         except Exception:
-            # нет прав на общее хранилище - пишем в приватную папку
-            path = os.path.join(data_dir(), "excel", kind)
+            pass
+        # Нет прав: запросить разрешение (диалог Android) и повторить
+        request_storage_permission()
+        try:
             os.makedirs(path, exist_ok=True)
+            return path
+        except Exception:
+            pass
+        # Прав нет (Android 11+ needs MANAGE): приватная папка приложения
+        path = os.path.join(data_dir(), "excel", sub)
+        os.makedirs(path, exist_ok=True)
         return path
     base = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "..", "excel")
@@ -135,6 +144,37 @@ def excel_dir(kind):
 
 def data_path():
     return os.path.join(data_dir(), "equipment.json")
+
+
+def request_storage_permission():
+    """Android: запросить разрешение на файлы (диалог при первом запуске).
+    Android 11+: MANAGE_EXTERNAL_STORAGE (все файлы)."""
+    if platform != "android":
+        return
+    try:
+        from android.permissions import request_permissions, Permission
+        request_permissions([
+            Permission.READ_EXTERNAL_STORAGE,
+            Permission.WRITE_EXTERNAL_STORAGE,
+            Permission.MANAGE_EXTERNAL_STORAGE,
+        ])
+    except Exception as e:
+        print("perm request error:", e)
+
+
+def can_write_shared_storage():
+    """Проверяем, можно ли писать в /sdcard/equipment."""
+    if platform != "android":
+        return True
+    try:
+        probe = "/sdcard/equipment/.probe"
+        os.makedirs(os.path.dirname(probe), exist_ok=True)
+        with open(probe, "w") as f:
+            f.write("ok")
+        os.remove(probe)
+        return True
+    except Exception:
+        return False
 
 
 def load_records():
@@ -789,6 +829,8 @@ class EquipmentApp(App):
     search_text = StringProperty("")
 
     def build(self):
+        if platform == "android":
+            request_storage_permission()
         if platform not in ("android", "ios"):
             try:
                 Window.size = (440, 800)
@@ -863,7 +905,10 @@ class EquipmentApp(App):
                daemon=True).start()
 
     def periodic_sync(self, dt):
-        self.sync_client.sync_now()
+        # Сеть - только в фоновом потоке: прямой вызов подвешивает UI
+        from threading import Thread
+        Thread(target=lambda: self.sync_client.sync_now(),
+               daemon=True).start()
 
     def manual_sync(self, *a):
         """Принудительная синхронизация данных с сервером."""
@@ -1216,24 +1261,25 @@ class EquipmentApp(App):
         scr.add_widget(box)
 
     def _auto_grow(self, inst):
-        """Строка ввода растёт вниз, если текст переносится на новые строки."""
+        """Строка ввода растёт вниз, если текст переносится. Кэш: пересчёт
+        только при смене числа строк (не на каждый символ)."""
         import kivy.metrics as _m
         try:
             if not inst.text:
                 inst.height = _m.dp(56)
                 return
-            # Проверяем реальную ширину текста через рендер (font_size
-            # числом: "18sp" недопустим для CoreLabel)
             from kivy.core.text import Label as CoreLabel
             lbl = CoreLabel(font_size=_m.sp(18), text=inst.text)
             lbl.refresh()
             text_w, _ = lbl.texture.size
-            # Полезная ширина поля (минус паддинги ~24dp)
             avail_w = max(inst.width - _m.dp(24), _m.dp(1))
             n_lines = max(1, int(text_w // avail_w) + 1)
+            prev = getattr(inst, "_lines_cached", 1)
+            if n_lines == prev:
+                return  # число строк не изменилось - не трогаем высоту
+            inst._lines_cached = n_lines
             inst.height = max(_m.dp(56), _m.dp(50) + (n_lines - 1) * _m.dp(32))
         except Exception:
-            # при любой проблеме оставляем стандартную высоту
             inst.height = _m.dp(56)
 
     # ---------- режимы экрана редактирования ----------
@@ -1636,9 +1682,19 @@ class EquipmentApp(App):
                 keys.add("n:" + name.lower())
         return len(keys)
 
+    _last_list_hash = None
+
     def refresh_list(self):
         if not hasattr(self, "list_container"):
             return
+        # Пропускаем перерисовку, если данные не изменились (sync каждые 30с
+        # не должен дёргать список вхолостую)
+        import json as _json
+        h = _json.dumps(self.records, ensure_ascii=False, sort_keys=True,
+                        default=str)
+        if h == self._last_list_hash:
+            return
+        self._last_list_hash = h
         self.list_container.clear_widgets()
         recs = self.visible_records()
         if self.search_text:
