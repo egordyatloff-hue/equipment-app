@@ -982,13 +982,10 @@ class EquipmentApp(App):
             size_hint=(1, None),
             height=Window.height)
         def _adjust_height(w, h):
-            # растянутая распорка = полноэкранный режим
-            if getattr(w, "_fullscreen_mode", True):
-                w.height = max(h, Window.height)
-            else:
-                w.height = h
+            # высота = минимум окна (без чёрных зон) + контент при его росте;
+            # fullscreen_mode только добавляет распорку для прижатия кнопок
+            w.height = max(h, Window.height)
         box.bind(minimum_height=_adjust_height)
-        box._fullscreen_mode = True
         self._bg_panel(box)
 
         titlewrap = BoxLayout(size_hint_y=None, height=dp(32),
@@ -1054,13 +1051,9 @@ class EquipmentApp(App):
             minimum_height=lambda w, h: setattr(w, "height", h))
         box.add_widget(self.view_area)
 
-        # Распорка: растягивается и прижимает кнопки к низу экрана
-        self._spacers = [BoxLayout(size_hint_y=1)]
-        box.add_widget(self._spacers[0])
-        # Небольшой отступ после состояния прибора перед кнопками
-        box.add_widget(BoxLayout(size_hint_y=None, height=dp(14)))
-
-        # Область кнопок: содержимое зависит от режима экрана
+        # Отступ перед кнопками
+        box.add_widget(BoxLayout(size_hint_y=None, height=dp(10)))
+        # Область кнопок - в потоке контента (листается с формой)
         self.btns_area = BoxLayout(orientation="vertical",
                                    size_hint_y=None, spacing=dp(8),
                                    padding=[0, dp(4), 0, dp(4)])
@@ -1263,11 +1256,6 @@ class EquipmentApp(App):
         self.inputs_area.height = 0
         self._fill_view_mode()
         self.view_area.height = self.view_area.minimum_height
-        for sp in getattr(self, "_spacers", []):
-            sp.size_hint_y = 1
-        if hasattr(self, "_edit_box"):
-            self._edit_box._fullscreen_mode = True
-            self._edit_box.height = Window.height
         self.ed_title.text = "Просмотр прибора"
 
     def _restore_inputs(self):
@@ -1301,6 +1289,23 @@ class EquipmentApp(App):
                 size_hint_y=None, height=dp(22), halign="left"))
             self.inputs_area.add_widget(self.state_label_btn)
         self.inputs_area.height = self.inputs_area.minimum_height
+
+    def _view_row_height(self, inst):
+        """Высота строки просмотра: растёт при переносе текста."""
+        import kivy.metrics as _m
+        try:
+            if not inst.text:
+                inst.height = _m.dp(30)
+                return
+            from kivy.core.text import Label as CoreLabel
+            lbl = CoreLabel(font_size=_m.sp(22), text=inst.text)
+            lbl.refresh()
+            text_w, _ = lbl.texture.size
+            avail_w = max(inst.width - _m.dp(4), _m.dp(1))
+            n_lines = max(1, int(text_w // avail_w) + 1)
+            inst.height = _m.dp(30) + (n_lines - 1) * _m.dp(30)
+        except Exception:
+            inst.height = _m.dp(30)
 
     def _fill_view_mode(self):
         """Заполнить область просмотра значениями записи.
@@ -1340,9 +1345,12 @@ class EquipmentApp(App):
             body.add_widget(AutoLabel(
                 text=label, font_size="16sp", color=C["text_light"],
                 size_hint_y=None, height=dp(22), halign="left"))
-            body.add_widget(AutoLabel(
+            # Значение: с автопереносом, высота по числу строк
+            lbl = AutoLabel(
                 text=value, bold=True, font_size="22sp", color=C["text"],
-                size_hint_y=None, height=dp(30), halign="left"))
+                size_hint_y=None, halign="left")
+            lbl.bind(width=lambda inst, w_: self._view_row_height(inst))
+            body.add_widget(lbl)
         # Состояние - ярлыком
         body.add_widget(AutoLabel(
             text="Состояние", font_size="16sp", color=C["text_light"],
@@ -1355,7 +1363,19 @@ class EquipmentApp(App):
         body.add_widget(chip)
         card.add_widget(body)
         self.view_area.add_widget(card)
+        # высоты пересчитаются через minimum_height (bind уже стоит),
+        # но для надёжности обновим сейчас и через кадр
         card.height = card.minimum_height
+        self.view_area.height = self.view_area.minimum_height
+        from kivy.clock import Clock
+        Clock.schedule_once(lambda dt: self._refresh_view_heights(), 0.1)
+
+    def _refresh_view_heights(self):
+        card = None
+        for w in self.view_area.children:
+            card = w
+        if card is not None:
+            card.height = card.minimum_height
         self.view_area.height = self.view_area.minimum_height
 
     def _show_edit_mode(self):
@@ -1385,11 +1405,6 @@ class EquipmentApp(App):
         self.view_area.clear_widgets()
         self.view_area.height = 0
         # Распорка снова растягивается (кнопки прижаты к низу)
-        for sp in getattr(self, "_spacers", []):
-            sp.size_hint_y = 1
-        if hasattr(self, "_edit_box"):
-            self._edit_box._fullscreen_mode = True
-            self._edit_box.height = Window.height
         self.ed_title.text = "Редактирование"
 
     def _show_new_mode(self):
@@ -1408,21 +1423,12 @@ class EquipmentApp(App):
         self._restore_inputs()
         self.view_area.clear_widgets()
         self.view_area.height = 0
-        # Сжимаем распорку и высоту экрана - кнопки поднимаются
-        self._spacers = getattr(self, "_spacers", [])
-        for sp in self._spacers:
-            sp.size_hint_y = None
-            sp.height = dp(28)
-        if hasattr(self, "_edit_box"):
-            self._edit_box._fullscreen_mode = False
-            self._edit_box.height = self._edit_box.minimum_height
-        # Открываем верх формы; кнопки в конце - листаем вниз при надобности.
-        # scroll_y применяется после пересчёта layout (ленивый minimum_height)
+        # При открытии показываем ВЕРХ формы (заголовок + первые поля);
+        # после layout'а контента отложенная прокрутка гарантирует верх
         if hasattr(self, "_edit_scroll"):
             sc = self._edit_scroll
-            sc.scroll_y = 1
             Clock.schedule_once(lambda dt: setattr(sc, "scroll_y", 1), 0.1)
-            Clock.schedule_once(lambda dt: setattr(sc, "scroll_y", 1), 0.3)
+            Clock.schedule_once(lambda dt: setattr(sc, "scroll_y", 1), 0.35)
         self.ed_title.text = "Новая запись"
 
     def confirm_edit(self):
