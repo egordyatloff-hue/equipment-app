@@ -115,23 +115,10 @@ def excel_dir(kind):
     ПК: папка приложения/excel/<kind>.
     """
     if platform == "android":
-        base = "/sdcard/equipment"
         sub = {"devices": "записи приборов", "all": "все записи"}.get(kind, kind)
-        path = os.path.join(base, sub)
-        try:
-            os.makedirs(path, exist_ok=True)
-            return path
-        except Exception:
-            pass
-        # Нет прав: запросить разрешение (диалог Android) и повторить
-        request_storage_permission()
-        try:
-            os.makedirs(path, exist_ok=True)
-            return path
-        except Exception:
-            pass
-        # Прав нет (Android 11+ needs MANAGE): приватная папка приложения
-        path = os.path.join(data_dir(), "excel", sub)
+        # Общая память: /sdcard/equipment/<sub> - видна в файловом
+        # менеджере. Требует выданного разрешения «Все файлы».
+        path = "/sdcard/equipment/" + sub
         os.makedirs(path, exist_ok=True)
         return path
     base = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -147,19 +134,36 @@ def data_path():
 
 
 def request_storage_permission():
-    """Android: запросить разрешение на файлы (диалог при первом запуске).
-    Android 11+: MANAGE_EXTERNAL_STORAGE (все файлы)."""
+    """Android: разрешение на файлы.
+    - Runtime-диалог READ/WRITE (для Android <=10);
+    - Android 11+: MANAGE_EXTERNAL_STORAGE выдаётся только через
+      системный экран настроек - открываем его, юзер включает тумблер."""
     if platform != "android":
         return
+    # 1. Обычный runtime-диалог
     try:
         from android.permissions import request_permissions, Permission
         request_permissions([
             Permission.READ_EXTERNAL_STORAGE,
             Permission.WRITE_EXTERNAL_STORAGE,
-            Permission.MANAGE_EXTERNAL_STORAGE,
         ])
     except Exception as e:
         print("perm request error:", e)
+
+    # 2. Экран «Все файлы» (Android 11+)
+    try:
+        from jnius import autoclass
+        Intent = autoclass("android.content.Intent")
+        Settings = autoclass("android.provider.Settings")
+        Uri = autoclass("android.net.Uri")
+        activity = autoclass("org.kivy.android.PythonActivity").mActivity
+        intent = Intent(
+            Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+        intent.setData(Uri.parse(
+            "package:" + activity.getPackageName()))
+        activity.startActivity(intent)
+    except Exception as e:
+        print("manage-all-files screen error:", e)
 
 
 def can_write_shared_storage():
@@ -971,13 +975,18 @@ class EquipmentApp(App):
         add_btn("На поверке", C["warning"], self.open_verification)
         add_btn("Без поверки", C["text_light"], self.open_no_verification)
         add_btn("Месяц", C["primary"], self.open_due)
-        add_btn("Excel", C["primary_dark"], self.export_to_excel)
+        add_btn("Excel", C["primary_dark"], self.export_with_perm)
         add_btn("Обновить данные", C["accent"], self.manual_sync)
         add_btn("Проверить обновления", C["primary"], self.check_updates)
         box.add_widget(Button(
             text="Закрыть", size_hint_y=None, height=dp(44),
             on_release=lambda *a: pop.dismiss()))
         pop.open()
+
+    def export_with_perm(self, *a):
+        """Excel: сначала запросить разрешение на файлы, потом экспорт."""
+        request_storage_permission()
+        self.export_to_excel()
 
     def _bg_panel(self, box):
         with box.canvas.before:
@@ -1089,21 +1098,23 @@ class EquipmentApp(App):
             size_hint_y=None, height=dp(22), halign="left"))
         self.inputs_area.add_widget(self.state_label_btn)
 
-        # Просмотр: текстовые поля с подписями (вместо строк ввода)
+        # Просмотр: текстовые поля с подписями (в режиме просмотра)
         self.view_area = BoxLayout(orientation="vertical", spacing=dp(6),
                                    size_hint_y=None)
         self.view_area.bind(
             minimum_height=lambda w, h: setattr(w, "height", h))
         box.add_widget(self.view_area)
 
-        # Отступ перед кнопками (на телефоне кнопки не должны наезжать
-        # на состояние прибора)
-        box.add_widget(BoxLayout(size_hint_y=None, height=dp(24)))
-        # Область кнопок - в потоке контента (листается с формой)
+        # Отступ после состояния прибора
+        box.add_widget(BoxLayout(size_hint_y=None, height=dp(14)))
+        # Кнопки ВНИЗУ контента: листаются вместе с формой
         self.btns_area = BoxLayout(orientation="vertical",
                                    size_hint_y=None, spacing=dp(8),
-                                   padding=[0, dp(12), 0, dp(4)])
+                                   padding=[0, 0, 0, dp(8)])
+        self.btns_area.bind(
+            minimum_height=lambda w, h: setattr(w, "height", h))
         box.add_widget(self.btns_area)
+
         self._edit_inputs = (self.in_name, self.in_serial, self.in_object,
                              self.in_location, self.in_executor,
                              self.in_date, self.in_action_date,

@@ -4,7 +4,7 @@ package.name = equipment_calibration
 package.domain = org.equipment
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas
-version = 1.3
+version = 1.4
 requirements = python3,kivy==2.3.1,filetype,certifi,openpyxl==3.1.5,et_xmlfile==2.0.0
 p4a.branch = release-2024.01.21
 orientation = portrait
@@ -21,3 +21,6 @@ android.extra_pip_args = --trusted-host pypi.org --trusted-host files.pythonhost
 [buildozer]
 log_level = 2
 warn_on_root = 1
+
+# Разрешить запись в общее хранилище на Android 10+ (legacy flag)
+android.extra_manifest_application_arguments = android:requestLegacyExternalStorage="true"
