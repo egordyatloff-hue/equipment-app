@@ -133,14 +133,24 @@ def data_path():
     return os.path.join(data_dir(), "equipment.json")
 
 
+def has_all_files_permission():
+    """Android 11+: выдано ли разрешение «Все файлы»."""
+    if platform != "android":
+        return True
+    try:
+        from jnius import autoclass
+        Environment = autoclass("android.os.Environment")
+        return Environment.isExternalStorageManager()
+    except Exception:
+        return True
+
+
 def request_storage_permission():
-    """Android: разрешение на файлы.
-    - Runtime-диалог READ/WRITE (для Android <=10);
-    - Android 11+: MANAGE_EXTERNAL_STORAGE выдаётся только через
-      системный экран настроек - открываем его, юзер включает тумблер."""
+    """Android: разрешение на файлы. Открываем системный экран «Все файлы»
+    ТОЛЬКО если ещё не выдано."""
     if platform != "android":
         return
-    # 1. Обычный runtime-диалог
+    # 1. Обычный runtime-диалог (Android <=10 / legacy)
     try:
         from android.permissions import request_permissions, Permission
         request_permissions([
@@ -150,7 +160,9 @@ def request_storage_permission():
     except Exception as e:
         print("perm request error:", e)
 
-    # 2. Экран «Все файлы» (Android 11+)
+    # 2. Экран «Все файлы» - ТОЛЬКО если ещё не выдано
+    if has_all_files_permission():
+        return
     try:
         from jnius import autoclass
         Intent = autoclass("android.content.Intent")
@@ -833,8 +845,6 @@ class EquipmentApp(App):
     search_text = StringProperty("")
 
     def build(self):
-        if platform == "android":
-            request_storage_permission()
         if platform not in ("android", "ios"):
             try:
                 Window.size = (440, 800)
@@ -1608,8 +1618,8 @@ class EquipmentApp(App):
                                     "Приборы_%s.xlsx" % stamp)
                 n = export_excel(self.records, path)
             self._popup("Экспорт завершён",
-                        "Файл: %s\nСохранён в:\n%s\nЗаписей: %d"
-                        % (os.path.basename(path), path, n))
+                        "Файл: %s\nЗаписей: %d\nПуть: /sdcard/equipment"
+                        % (os.path.basename(path), n))
         except Exception as e:
             self._popup("Ошибка экспорта", str(e))
 
