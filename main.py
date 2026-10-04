@@ -1096,12 +1096,13 @@ class EquipmentApp(App):
             minimum_height=lambda w, h: setattr(w, "height", h))
         box.add_widget(self.view_area)
 
-        # Отступ перед кнопками
-        box.add_widget(BoxLayout(size_hint_y=None, height=dp(10)))
+        # Отступ перед кнопками (на телефоне кнопки не должны наезжать
+        # на состояние прибора)
+        box.add_widget(BoxLayout(size_hint_y=None, height=dp(24)))
         # Область кнопок - в потоке контента (листается с формой)
         self.btns_area = BoxLayout(orientation="vertical",
                                    size_hint_y=None, spacing=dp(8),
-                                   padding=[0, dp(4), 0, dp(4)])
+                                   padding=[0, dp(12), 0, dp(4)])
         box.add_widget(self.btns_area)
         self._edit_inputs = (self.in_name, self.in_serial, self.in_object,
                              self.in_location, self.in_executor,
@@ -1109,6 +1110,22 @@ class EquipmentApp(App):
                              self.in_comment, self.state_label_btn)
         scroll.add_widget(box)
         scr.add_widget(scroll)
+
+    def _recalc_edit_layout(self):
+        """Принудительный пересчёт высот после смены режима:
+        inputs_area и box подгоняются под реальный контент.
+        Без этого на телефоне кнопки наезжают на состояние прибора."""
+        from kivy.clock import Clock
+
+        def do(dt):
+            try:
+                self.inputs_area.height = self.inputs_area.minimum_height
+                self._edit_box.height = max(
+                    self._edit_box.minimum_height, Window.height)
+            except Exception:
+                pass
+        Clock.schedule_once(do, 0)
+        Clock.schedule_once(do, 0.2)
 
     def _build_due_screen(self, scr):
         scr.clear_widgets()
@@ -1303,6 +1320,7 @@ class EquipmentApp(App):
         self._fill_view_mode()
         self.view_area.height = self.view_area.minimum_height
         self.ed_title.text = "Просмотр прибора"
+        self._recalc_edit_layout()
 
     def _restore_inputs(self):
         """Возвращает строки ввода в inputs_area (после clear_widgets
@@ -1452,6 +1470,7 @@ class EquipmentApp(App):
         self.view_area.height = 0
         # Распорка снова растягивается (кнопки прижаты к низу)
         self.ed_title.text = "Редактирование"
+        self._recalc_edit_layout()
 
     def _show_new_mode(self):
         """Новая запись: кнопки «Создать» и «Отмена» сразу под полями."""
@@ -1476,6 +1495,7 @@ class EquipmentApp(App):
             Clock.schedule_once(lambda dt: setattr(sc, "scroll_y", 1), 0.1)
             Clock.schedule_once(lambda dt: setattr(sc, "scroll_y", 1), 0.35)
         self.ed_title.text = "Новая запись"
+        self._recalc_edit_layout()
 
     def confirm_edit(self):
         """Спросить подтверждение перед изменением записи."""
